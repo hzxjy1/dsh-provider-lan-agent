@@ -1,12 +1,11 @@
 /**
  * `@local/dsh-provider-lan-agent` — browser half.
  *
- * One settings section (`settings.section`, id `lanagent-audit`) showing what the
- * vendor's agent actually asked DSH to run, because that activity is invisible
- * everywhere else: the bridge executes tool calls out of band, so the
- * conversation never receives a Tool call row and no card is drawn (design notes
- * §19). The Host already records every request, including the ones its own
- * translation refuses; this page renders that record.
+ * One settings section (`settings.section`, id `lanagent-audit`) showing the
+ * translation diagnostics for the agent's tool requests: what it asked for,
+ * which DSH call ran, and how it was answered. Loop calls also appear in the
+ * conversation; this page is the cross-route view that additionally covers
+ * refusals, local answers, and parked requests.
  *
  * Data arrives over the plugin's same-origin `/lanagent/audit` route — the Host
  * half serves it from the same JSONL file the audit writer appends to — so this
@@ -28,8 +27,8 @@ window.__ModuleLoader__.load({
     const DICT = {
       zh: {
         nav: 'LAN Agent',
-        title: 'LAN Agent 工具调用',
-        description: '厂商的 agent 在服务端决定调用，实际执行发生在 DSH 里；这些调用不进对话流，所以在这里逐条记录。',
+        title: 'LAN Agent 工具调用诊断',
+        description: '厂商 agent 在服务端决定调用；这里按请求 id 展示翻译、路由与结果，包括被拒绝和本地应答的请求。loop 调用同时也会出现在会话里。',
         refresh: '刷新',
         auto: '每 10 秒自动刷新',
         empty: '还没有工具调用记录。',
@@ -40,19 +39,19 @@ window.__ModuleLoader__.load({
         colTime: '时间',
         colTool: '厂商请求',
         colDsh: 'DSH 执行',
-        colRoute: '路径',
+        colRoute: '路由',
         colMs: '耗时',
         colOk: '结果',
         detail: '详情',
         ok: '成功',
-        pending: '已交 loop',
+        pending: '停放中',
         failed: '失败',
         readError: '读取审计日志失败：',
       },
       en: {
         nav: 'LAN Agent',
-        title: 'LAN Agent tool calls',
-        description: 'The vendor agent decides server-side; execution happens in DSH. These calls never enter the conversation, so they are listed here.',
+        title: 'LAN Agent tool diagnostics',
+        description: 'The agent decides server-side; this view lists translation, route, and result per request id — including refusals and local answers. Loop calls also appear in the conversation.',
         refresh: 'Refresh',
         auto: 'Auto-refreshes every 10s',
         empty: 'No tool calls recorded yet.',
