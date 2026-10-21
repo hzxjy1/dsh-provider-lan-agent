@@ -68,8 +68,8 @@ const PATH_FIELDS = Object.freeze({
  * workspace, which is the only place DSH's `workspace-write` sandbox allows the
  * write tool to write. A fixed absolute target outside the workspace makes every
  * memory write fail with "[sandbox: file access denied]" — measured on a session
- * whose workspace was /home/user/misc while the target sat under
- * /home/user/.dsh (design notes §29).
+ * whose workspace was /work/project while the target sat under
+ * the DSH home (design notes §29).
  *
  * @param {readonly {from: string, to: string}[]} mappings
  * @param {string} [cwd] the session workspace.

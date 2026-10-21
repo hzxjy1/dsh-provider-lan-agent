@@ -589,6 +589,8 @@ class LanAgentAdapter {
           args: plan.mappedArguments ?? plan.calls[0]?.arguments,
           ok: answer.error === undefined && !String(answer.content?.[0]?.text ?? '').includes('未完成'),
           route: 'loop-late',
+          requestId: plan.requestId,
+          event: 'settled',
           dshTool: plan.calls.map((planned) => planned.dshTool).join(','),
           detail: `结果在预算到期后才返回（${Date.now() - (call.parkedAt ?? Date.now())}ms）`,
           ...answer.error === undefined
@@ -635,6 +637,8 @@ class LanAgentAdapter {
         args: plan.mappedArguments ?? plan.calls[0]?.arguments,
         ok: shaped.error === undefined,
         route: 'loop',
+        requestId: plan.requestId,
+        event: 'settled',
         dshTool: plan.calls.map((planned) => planned.dshTool).join(','),
         durationMs: Date.now() - (call.parkedAt ?? Date.now()),
         ...shaped.error === undefined
@@ -1147,6 +1151,8 @@ export function apply(ctx, config) {
       // ran and by which route (design notes §16).
       const meta = {}
       const startedAt = Date.now()
+      // One id per vendor request; parked loops emit `request` then `settled`.
+      const requestId = randomId()
       // The vendor names paths from its own CLI's world; map them once here so
       // both execution routes see the same, writable path (design notes §23).
       // Mappings are resolved per turn: a relative target lands inside THIS
@@ -1188,6 +1194,8 @@ export function apply(ctx, config) {
           ok: memoryAnswer.error === undefined,
           route: 'memory-local',
           dshTool: '(local)',
+          requestId,
+          event: 'settled',
           durationMs: Date.now() - startedAt,
           ...memoryAnswer.error === undefined ? { summary } : { detail: summary },
         })
@@ -1249,6 +1257,7 @@ export function apply(ctx, config) {
               resolveTool: loop.resolveTool,
               availableTools: loop.availableTools,
               readDocument,
+              requestId,
             })
             if (seamPlan.kind === 'dsh') {
               const planned = withStyle(seamPlan, loop.styleFor())
@@ -1272,6 +1281,8 @@ export function apply(ctx, config) {
                 args: seamPlan.mappedArguments ?? rawInput,
                 ok: null,
                 route: 'loop',
+                requestId: planned.requestId,
+                event: 'request',
                 dshTool: [
                   ...planned.calls.map((plannedCall) => plannedCall.dshTool),
                   ...planned.style === 'run_code' ? [`→${planned.transportCalls[0].dshTool}`] : [],
@@ -1287,6 +1298,8 @@ export function apply(ctx, config) {
               args: seamPlan.mappedArguments ?? rawInput,
               ok: immediate.error === undefined,
               route: 'loop',
+              requestId: seamPlan.requestId,
+              event: 'settled',
               dshTool: seamPlan.kind === 'local' ? '(local)' : '',
               ...immediate.error === undefined
                 ? { summary: String(immediate.content?.[0]?.text ?? '').slice(0, 240) }
@@ -1298,7 +1311,7 @@ export function apply(ctx, config) {
 
         // The bridge maps raw vendor arguments itself (the seam owns mapping);
         // memory and loop still use the mapped copy above until they migrate.
-        return await bridge(params, { signal: controller.signal, callId, meta })
+        return await bridge(params, { signal: controller.signal, callId, meta, requestId })
       } finally {
         clearTimeout(timer)
         turnSignal?.removeEventListener?.('abort', abort)

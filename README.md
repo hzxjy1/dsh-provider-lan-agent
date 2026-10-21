@@ -38,7 +38,7 @@ WS    /ws-api/coagent/<session_id>  → 服务端的工具调用，在本进程�
 | MCP 工具**清单注入**（让厂商模型知道自己有哪些 MCP 工具可调） | ✅ M3 |
 | 旁路轻量通道（session-title / compaction） | ✅ M1 |
 
-**验收证据**：`node --test` **214 项全绿**（协议/认证/目录/工具翻译/派发/审计 + 19 个真实 fixture 的契约测试）；
+**验收证据**：`node --test` **216 项全绿**（协议/认证/目录/工具翻译/派发/审计 + 19 个真实 fixture 的契约测试）；
 真实服务验证脚本保留在本地，不随仓库发布；
 GUI 模型选择器出现 `LAN Agent` 与 6 个模型；**真实 GUI 会话端到端跑通**
 （厂商 agent 调 `execute_command` → 桥 → DSH 真跑 `pwd && ls api-reference.md && date +%s` → 输出正确，
@@ -133,10 +133,18 @@ EOF
 > 想看字面的"运行命令"卡片，会话需跑在 native / `mode: code` 预设下；PTC 预设下卡片写的是 `run_code`（内层
 > `bash` 在轨迹里可见）。首次调用若被呈现层拒绝，会自动改用程序重试，代价是那一张卡片显示为失败。
 
+## 安装
+
+包以本地路径安装（profile 的 `node_modules/@local` 符号链接），不从公共 registry 发布：
+
+```sh
+pnpm test          # 216 项离线测试
+```
+
 ## 测试
 
 ```sh
-node --test                        # 214 项离线测试：解析/差分/投影/rules/认证/目录 + 工具翻译 + 契约 fixture（无需锚点）
+node --test                        # 216 项离线测试：解析/差分/投影/rules/认证/目录 + 工具翻译 + 契约 fixture（无需锚点）
 node --test test/contract/*.test.mjs  # 只跑契约测试：19 个 case，value 与 text-only 两种 outcome
 ```
 

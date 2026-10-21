@@ -27,6 +27,15 @@ test('writes one JSON line per record', () => {
   assert.match(lines[0].args, /pwd/)
 })
 
+test('keeps the request id and event so request/settled rows can be joined', () => {
+  const file = tempFile()
+  const audit = createAuditWriter(file)
+  audit({ name: 'bash', args: {}, ok: null, requestId: 'req-1', event: 'request' })
+  audit({ name: 'bash', args: {}, ok: true, requestId: 'req-1', event: 'settled' })
+  const lines = readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+  assert.deepEqual(lines.map((line) => [line.requestId, line.event]), [['req-1', 'request'], ['req-1', 'settled']])
+})
+
 test('clips huge arguments instead of accumulating file content', () => {
   const file = tempFile()
   const audit = createAuditWriter(file, { maxArgsChars: 40 })

@@ -74,6 +74,24 @@ target is resolved per session, which keeps writes inside the file sandbox.
 approvals/sandbox policy stay in DSH. `out-of-band` uses the bridge and answers
 immediately.
 
+## Trace
+
+Each interpreted request carries a `requestId`. A parked loop call emits two
+rows with that id — `event: "request"` when it parks and `event: "settled"` when
+the answer is known — so "parked and never resumed" is visible without guessing
+from timestamps. The bridge answers in the same step and emits `settled` only.
+The JSONL writer persists `requestId` and `event`; the panel can join them.
+
+## Memory policy
+
+The agent keeps a memory tree under its own CLI's home. Path mapping redirects
+that prefix into the session workspace (`.lan-agent-memory`). Requests whose
+paths all land inside that tree are answered locally by `src/memory.js`, before
+approval and before either runner: missing reads are empty rather than errors,
+writes create parents, and no DSH card is drawn. This is an explicit policy, not
+a second general-purpose execution path — mixed or outside paths take the normal
+route.
+
 ## Configuration and credentials
 
 - The row is `llm-lan-agent` in `cordis.patch.yml`; the base URL is the LAN

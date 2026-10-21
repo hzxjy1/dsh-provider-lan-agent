@@ -347,22 +347,28 @@ function passthroughPlan(vendor, input) {
  */
 export async function interpret(name, input, ctx = {}) {
   const vendor = ALIASES[String(name ?? '')] ?? String(name ?? '')
+  const requestId = ctx.requestId ?? randomUUID()
+  const finish = (plan, mapped) => {
+    if (plan !== null && typeof plan === 'object') {
+      plan.requestId = requestId
+      if (mapped !== undefined) plan.mappedArguments = mapped
+    }
+    return plan
+  }
   const args = input !== null && typeof input === 'object' ? input : {}
   if (INTERACTION_TOOLS.has(vendor)) {
-    return fail(vendor, `工具 ${vendor} 是厂商的交互类工具，当前 v1 不支持；请直接用文字向用户提问。`)
+    return finish(fail(vendor, `工具 ${vendor} 是厂商的交互类工具，当前 v1 不支持；请直接用文字向用户提问。`))
   }
   const entry = ENTRIES[vendor]
   if (entry === undefined) {
-    if (PASSTHROUGH_TOOL_NAMES.has(vendor) || vendor.startsWith('mcp__')) return passthroughPlan(vendor, args)
+    if (PASSTHROUGH_TOOL_NAMES.has(vendor) || vendor.startsWith('mcp__')) return finish(passthroughPlan(vendor, args), args)
     const available = [...Object.keys(ENTRIES), ...PASSTHROUGH_TOOL_NAMES].join(', ')
-    return fail(vendor, `工具 ${vendor} 在当前配置下不可用：该名字既不是 厂商内置工具，也不是 DSH 声明的工具。可用工具：${available}`)
+    return finish(fail(vendor, `工具 ${vendor} 在当前配置下不可用：该名字既不是厂商内置工具，也不是 DSH 声明的工具。可用工具：${available}`))
   }
   const mapped = mapVendorInput(vendor, args, ctx)
-  const plan = await entry.plan(mapped, ctx)
   // The trace records what the DSH side actually saw, not the vendor spelling
   // (design notes §23): keep the mapped arguments on the plan as a plain value.
-  if (plan !== null && typeof plan === 'object') plan.mappedArguments = mapped
-  return plan
+  return finish(await entry.plan(mapped, ctx), mapped)
 }
 
 /**

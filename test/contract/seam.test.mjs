@@ -182,6 +182,13 @@ test('run_code: DSH vocabulary passes through unchanged', async () => {
   assert.equal(answerText(render(plan, outcomesFor(entry).withValue, context(entry))), entry.calls[0].text)
 })
 
+test('the caller can pin the request id that request/settled events share', async () => {
+  const plan = await interpret('bash', { command: 'pwd', description: 'x' }, { requestId: 'trace-1' })
+  assert.equal(plan.requestId, 'trace-1')
+  const refusal = await interpret('does_not_exist', {}, { requestId: 'trace-2' })
+  assert.equal(refusal.requestId, 'trace-2')
+})
+
 test('Bash is an alias for execute_command', async () => {
   const entry = cases.find((item) => item.id === 'execute_command/success')
   const canonical = await interpret('execute_command', entry.arguments, context(entry))

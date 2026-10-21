@@ -331,7 +331,7 @@ test('a name in neither vocabulary is still refused, and says which it is', asyn
   const answer = await handle({ name: 'frobnicate', arguments: {} }, ctx)
   assert.equal(calls.length, 0)
   assert.match(answer.error.message, /frobnicate/)
-  assert.match(answer.error.message, /既不是 厂商内置工具/)
+  assert.match(answer.error.message, /既不是厂商内置工具/)
 })
 
 test('the audit hook records every request, including refusals that never reach DSH', async () => {
@@ -355,6 +355,8 @@ test('the audit hook records every request, including refusals that never reach 
   assert.equal(typeof records[0].durationMs, 'number')
   assert.equal(records[0].durationMs >= 0, true)
   assert.equal(records[0].dshTool, 'bash', 'the audit names the DSH tool that ran')
+  assert.equal(typeof records[0].requestId, 'string')
+  assert.equal(records[0].event, 'settled')
   assert.match(records[0].summary, /ok/, 'the successful answer is summarized')
   assert.equal(records[2].summary, undefined, 'failures carry detail instead of a summary')
 

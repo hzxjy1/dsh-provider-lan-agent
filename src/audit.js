@@ -72,6 +72,10 @@ export function createAuditWriter(file, { maxBytes = DEFAULT_MAX_BYTES, maxArgsC
         // dispatcher, which is the only layer that knows (design notes §16).
         ...record.dshTool === undefined ? {} : { dshTool: record.dshTool },
         ...record.route === undefined ? {} : { route: record.route },
+        // One request id, two events: `request` when a plan is parked, `settled`
+        // when its answer is known. Consumers join them by id.
+        ...record.requestId === undefined ? {} : { requestId: record.requestId },
+        ...record.event === undefined ? {} : { event: record.event },
         ...detail === undefined ? {} : { detail: detail.length <= 300 ? detail : `${detail.slice(0, 300)}…` },
         ...detail !== undefined || record.summary === undefined ? {} : { summary: record.summary },
         args: clip(record.args, maxArgsChars),

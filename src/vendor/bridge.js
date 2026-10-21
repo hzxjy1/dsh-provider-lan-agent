@@ -82,12 +82,15 @@ export function createToolBridge({
       documents,
       readDocument: reader,
       localAnswer: answerLocally,
+      requestId: context.requestId,
       logger,
     })
 
     const record = (answer, detail, extra = {}) => audit?.({
       name,
       args: plan.mappedArguments ?? input,
+      requestId: plan.requestId,
+      event: 'settled',
       ok: answer?.error === undefined,
       ...detail === undefined ? {} : { detail },
       durationMs: Date.now() - startedAt,
