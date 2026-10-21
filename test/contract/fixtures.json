@@ -23,7 +23,7 @@
           "key": "cmd",
           "dshTool": "bash",
           "isError": false,
-          "text": "/usr/sbin/init\n-rwxr-xr-x 1 root root 3430904 Sep 26 07:31 /init\n--- DS_MCP env ---\nDSH_WEB_URL=http://10.0.0.1:3081\nDSH_PROFILE=web\nDSH_PROFILE_DIR=/home/user/.dsh/profiles/web\nDSH_SHELL=1\nDSH_SESSION_ID=session-09a36a1d-4b8c-42c4-b51d-4cabc4c47184\nDSH_HOME=/home/user/.dsh\n",
+          "text": "/usr/sbin/init\n-rwxr-xr-x 1 root root 3430904 Sep 26 07:31 /init\n--- DS_MCP env ---\nDSH_WEB_URL=http://10.0.0.1:3081\nDSH_PROFILE=web\nDSH_PROFILE_DIR=/home/user/.dsh/profiles/web\nDSH_SHELL=1\nDSH_SESSION_ID=session-…\nDSH_HOME=/home/user/.dsh\n",
           "value": {
             "kind": "foreground",
             "exitCode": 0,
@@ -32,7 +32,7 @@
             "aborted": false,
             "timeoutMs": 300000,
             "stdout": {
-              "text": "/usr/sbin/init\n-rwxr-xr-x 1 root root 3430904 Sep 26 07:31 /init\n--- DS_MCP env ---\nDSH_WEB_URL=http://10.0.0.1:3081\nDSH_PROFILE=web\nDSH_PROFILE_DIR=/home/user/.dsh/profiles/web\nDSH_SHELL=1\nDSH_SESSION_ID=session-09a36a1d-4b8c-42c4-b51d-4cabc4c47184\nDSH_HOME=/home/user/.dsh\n",
+              "text": "/usr/sbin/init\n-rwxr-xr-x 1 root root 3430904 Sep 26 07:31 /init\n--- DS_MCP env ---\nDSH_WEB_URL=http://10.0.0.1:3081\nDSH_PROFILE=web\nDSH_PROFILE_DIR=/home/user/.dsh/profiles/web\nDSH_SHELL=1\nDSH_SESSION_ID=session-…\nDSH_HOME=/home/user/.dsh\n",
               "truncated": false
             },
             "stderr": {

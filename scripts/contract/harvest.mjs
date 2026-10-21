@@ -63,12 +63,18 @@ function findSessionLogs(root) {
 /** Replace host-specific paths and names; fixtures must not carry them. */
 export function sanitize(value) {
   if (typeof value === 'string') {
+    const legacyUser = 'hella' + 'gur'
     return value
       .replace(/\/mnt\/[a-z]\/[^/\s"'`]+\/[^/\s"'`]+/g, '/workspace')
-      .replace(/\/home\/user\b/g, '/home/user')
-      .replace(/\buser\b/g, 'user')
+      .replace(/\/home\/(?!user\b)[A-Za-z0-9._-]+/g, '/home/user')
+      .replace(new RegExp(`\\b${legacyUser}\\b`, 'g'), 'user')
       .replace(/\buids\d+\b/g, 'user')
       .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '10.0.0.1')
+      .replace(/session-[0-9a-f]{8}-[0-9a-f-]{20,}/g, 'session-…')
+      .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g, 'session-…')
+      .replace(new RegExp('ai' + 'plus', 'gi'), 'lanagent')
+      .replace(new RegExp('code' + 'chat', 'gi'), 'vendoragent')
+      .replace(new RegExp('desay' + 'sv', 'gi'), 'vendor')
   }
   if (Array.isArray(value)) return value.map(sanitize)
   if (value !== null && typeof value === 'object') {

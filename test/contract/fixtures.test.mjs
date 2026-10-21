@@ -149,7 +149,7 @@ test('fixtures: no machine-specific data survived sanitization', () => {
   for (const forbidden of forbiddenTerms) {
     assert.equal(text.includes(forbidden), false, `fixture leaks ${forbidden}`)
   }
-  assert.ok(!/session-[0-9a-f]{8}-[0-9a-f]{20,}/.test(text), 'fixture leaks a raw session id')
+  assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/.test(text), 'fixture leaks a raw UUID')
 })
 
 test('fixtures: the file stays small enough to review', () => {
