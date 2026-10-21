@@ -1,0 +1,130 @@
+# Bundle patch for @local/dsh-provider-lan-agent.
+#
+# One Host row. The plugin registers the `lanagent` provider route on `ctx.llm`
+# and declares it as a configurable provider, so the Models settings surface can
+# see it and write the credential reference this row names.
+#
+# `passwordRef` is a credential REFERENCE, never a secret: the password itself
+# lives in the credential store ($DSH_HOME/.credentials.yaml `refs:`, mode 600)
+# or in the launching environment. The row here only names the reference.
+#
+# NOTE: a patch entry REPLACES the targeted row's whole `config`; this file is
+# the single definition point for the `llm-lan-agent` row.
+
+- insert:
+    - id: llm-lan-agent
+      name: '@local/dsh-provider-lan-agent'
+      config:
+        route: lanagent
+        baseURL: https://10.219.9.56
+        # The account is treated as hidden information: it lives in the
+        # credential store behind auth.userRef, exactly like the password, so it
+        # does not appear in any deployment file. The plain-config `user:` field
+        # still exists as a fallback but is deliberately left empty here.
+        user: ''
+        auth:
+          # login: password -> JWT (the only automatic path).
+          # token:  read an existing JWT and never log in (escape hatch).
+          mode: login
+          # The vendor API calls the account `user`; both refs are credential
+          # references, never secrets themselves.
+          userRef: LAN_AGENT_USER
+          passwordRef: LAN_AGENT_PASSWORD
+          tokenRef: LAN_AGENT_TOKEN
+          tokenFile: ''
+          loginBackoff:
+            initialMs: 30000
+            maxMs: 1800000
+            maxAttemptsPerHour: 6
+        catalogTtlMs: 21600000
+        # rules: pass the DSH system prompt through the `rules` channel.
+        # none:  rely on the vendor's own system prompt only.
+        systemPromptMode: rules
+        # auto: think=yes only when DSH asks for a reasoning effort.
+        thinkMode: auto
+        # light: session-title / compaction calls run without the tool channel
+        #        and with an instruction not to call tools.
+        purposePolicy: light
+        # The tool channel is what keeps a turn from stalling: the vendor's agent
+        # delegates every tool call to the client and waits for our answer
+        # (measured: a 130s-late answer was still accepted; see design notes §20).
+        toolChannel: enabled
+        # dsh:    run the vendor's tool calls through ctx.tools.execute()
+        #         (approvals, sandbox policy, and guards stay in DSH).
+        # refuse: answer every call with an error (the M1 behaviour; useful for
+        #         isolating protocol problems from tool-execution problems).
+        toolBridge: dsh
+        # M3: declare DSH's own toolbox to the vendor as ONE synthetic MCP server
+        # (`use_mcp_tool` calls it back over the WebSocket and the bridge runs it).
+        # The vendor pays tokens for every schema, so the list stays narrow: the
+        # tools it has no equivalent for (DSH's MCP servers, subagents, planning)
+        # plus the plain file/command tools under their DSH names.
+        mcpToolbox: enabled
+        mcpToolboxName: dsh_toolbox
+        # Measured: the broad `mcp__*` list published 64 schemas = ~11.8K tokens
+        # per request. This narrow list publishes ~14 = ~2.1K tokens.
+        mcpToolWhitelist:
+          # The vendor's agent can ask the DSH user a question: the tool is a
+          # passthrough name, so the loop route turns it into the real question
+          # UI and the answer is projected into the session.
+          - ask_user_question
+          - skill
+          - web_fetch
+          - web_search
+          # Browser tools: the skills that handle "download this authenticated
+          # page's PDF" (edge-cdp / playwright) tell the model to drive the
+          # browser, and without these the skill loads but cannot be used
+          # (measured: the vendor said "playwright-edge MCP is disabled in this
+          # session" and improvised with shell). A deliberately SMALL subset —
+          # each schema costs tokens on every request.
+          - mcp__playwright-edge__browser_navigate
+          - mcp__playwright-edge__browser_snapshot
+          - mcp__playwright-edge__browser_evaluate
+          - mcp__playwright-edge__browser_click
+          - mcp__playwright-edge__browser_type
+          - mcp__playwright-edge__browser_tabs
+          - mcp__playwright-edge__browser_wait_for
+          - mcp__playwright-edge__browser_network_requests
+          - mcp__playwright-edge__browser_network_request
+          - mcp__playwright-edge__browser_console_messages
+          - mcp__playwright-edge__browser_take_screenshot
+          - mcp__serial__list_ports
+          - mcp__serial__open
+          - mcp__serial__read
+          - mcp__serial__write
+          - mcp__serial__close
+          - mcp__serial__set_control_lines
+          - 'mcp__claw__*'
+          - subagent
+          - subagent_fork
+          - todo_write
+        mcpToolboxMaxTools: 36
+        # Every vendor tool request lands here, one JSON line each. This is the
+        # only trace of a request our translation refuses (DSH never sees it).
+        # How the vendor's tool calls run (design notes §21):
+        #   loop         DSH's agent loop executes them — native "run command"
+        #                card, approvals, transcript rows, live output.
+        #   out-of-band  the bridge executes them and answers immediately;
+        #                nothing shows in the conversation (the pre-change behaviour).
+        toolExecution: loop
+        # pathMappings defaults to the vendor CLI's home directory mapped to a
+        # workspace-relative `.lan-agent-memory`. Override it here only if that
+        # spelling differs in your deployment.
+        # Honour the vendor's per-call `requires_approval` through DSH's approval
+        # seam, before anything runs or is parked (both routes behave alike).
+        honorRequiresApproval: true
+        # Fallback budget for a loop-routed call when the vendor sends no timeout
+        # of its own. execute_command declares 300000ms, which wins over this.
+        loopBudgetMs: 240000
+        # Grace window for sibling tool requests: frames arriving inside it share
+        # ONE assistant step (and therefore one loop step). Measured: this
+        # vendor's server serializes its own calls (~1.0s apart), so the window
+        # only pays off when frames really do arrive together.
+        loopCollectMs: 40
+        # toolAuditFile is disabled by default. Set it to an absolute JSONL path
+        # to enable the translation-diagnostics panel.
+        # Soft per-tool deadline. The vendor gives up on an unanswered call after
+        # tool's own timeout (the vendor sends timeout: 300000), so this stays a
+        # courtesy bound rather than a hard requirement (design notes §20).
+        toolTimeoutMs: 20000
+        requestTimeoutMs: 300000

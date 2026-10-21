@@ -1,0 +1,520 @@
+{
+  "version": 1,
+  "provenance": {
+    "harvestedAt": "2026-10-21T03:54:46.679Z",
+    "sessions": 66,
+    "pairedSamples": 461,
+    "textOnlySamples": 119,
+    "note": "Curated from lanagent session logs; paths and account names sanitized. Expected answers are added with the seam."
+  },
+  "cases": [
+    {
+      "id": "execute_command/success",
+      "kind": "dsh",
+      "vendor": "execute_command",
+      "cwd": "/workspace",
+      "arguments": {
+        "command": "which init; ls -la /init 2>&1; echo \"--- DS_MCP env ---\"; env | grep -i -E \"mcp|dsh_\" | head -20",
+        "workdir": ".",
+        "timeout": 300000
+      },
+      "calls": [
+        {
+          "key": "cmd",
+          "dshTool": "bash",
+          "isError": false,
+          "text": "/usr/sbin/init\n-rwxr-xr-x 1 root root 3430904 Sep 26 07:31 /init\n--- DS_MCP env ---\nDSH_WEB_URL=http://10.0.0.1:3081\nDSH_PROFILE=web\nDSH_PROFILE_DIR=/home/user/.dsh/profiles/web\nDSH_SHELL=1\nDSH_SESSION_ID=session-09a36a1d-4b8c-42c4-b51d-4cabc4c47184\nDSH_HOME=/home/user/.dsh\n",
+          "value": {
+            "kind": "foreground",
+            "exitCode": 0,
+            "signal": null,
+            "timedOut": false,
+            "aborted": false,
+            "timeoutMs": 300000,
+            "stdout": {
+              "text": "/usr/sbin/init\n-rwxr-xr-x 1 root root 3430904 Sep 26 07:31 /init\n--- DS_MCP env ---\nDSH_WEB_URL=http://10.0.0.1:3081\nDSH_PROFILE=web\nDSH_PROFILE_DIR=/home/user/.dsh/profiles/web\nDSH_SHELL=1\nDSH_SESSION_ID=session-09a36a1d-4b8c-42c4-b51d-4cabc4c47184\nDSH_HOME=/home/user/.dsh\n",
+              "truncated": false
+            },
+            "stderr": {
+              "text": "",
+              "truncated": false
+            },
+            "sandbox": {
+              "mode": "workspace-write",
+              "denied": false,
+              "enforcement": "full"
+            }
+          }
+        }
+      ],
+      "note": "A foreground command: text is raw stdout, value carries exit code and sandbox mode."
+    },
+    {
+      "id": "execute_command/timeout",
+      "kind": "dsh",
+      "vendor": "execute_command",
+      "cwd": "/workspace",
+      "arguments": {
+        "command": "sleep 300",
+        "workdir": ".",
+        "timeout": 300000
+      },
+      "calls": [
+        {
+          "key": "cmd",
+          "dshTool": "bash",
+          "isError": true,
+          "text": "Error: command timed out after 300000ms"
+        }
+      ],
+      "note": "Synthetic: the harvested lanagent sessions had no failing bash. Shape is the executor refusal envelope."
+    },
+    {
+      "id": "read_files/success",
+      "kind": "dsh",
+      "vendor": "read_files",
+      "cwd": "/workspace",
+      "arguments": {
+        "paths": [
+          "/home/user/.dsh/fuzzy-probe.txt"
+        ]
+      },
+      "calls": [
+        {
+          "key": "read:0",
+          "dshTool": "read",
+          "isError": false,
+          "text": "<path>/home/user/.dsh/fuzzy-probe.txt</path>\n<type>file</type>\n<content>\n1: keep-me\n2: TARGET-LINE   \n3: neighbour\n\n(End of file - total 3 lines)\n</content>",
+          "value": {
+            "path": "/home/user/.dsh/fuzzy-probe.txt",
+            "offset": 1,
+            "lines": [
+              {
+                "number": 1,
+                "text": "keep-me"
+              },
+              {
+                "number": 2,
+                "text": "TARGET-LINE   "
+              },
+              {
+                "number": 3,
+                "text": "neighbour"
+              }
+            ],
+            "totalLines": 3
+          }
+        }
+      ],
+      "note": "Text has line numbers and a footer; value.lines is the same content without prefixes."
+    },
+    {
+      "id": "read_files/partial",
+      "kind": "dsh",
+      "vendor": "read_files",
+      "cwd": "/workspace",
+      "arguments": {
+        "paths": [
+          "/home/user/.dsh/fuzzy-probe.txt",
+          "/home/user/.dsh/lan-agent-memory/projects/-/memory/26f4d39fdf5f334d/session_notes.md"
+        ]
+      },
+      "calls": [
+        {
+          "key": "read:0",
+          "dshTool": "read",
+          "isError": false,
+          "text": "<path>/home/user/.dsh/fuzzy-probe.txt</path>\n<type>file</type>\n<content>\n1: keep-me\n2: TARGET-LINE   \n3: neighbour\n\n(End of file - total 3 lines)\n</content>",
+          "value": {
+            "path": "/home/user/.dsh/fuzzy-probe.txt",
+            "offset": 1,
+            "lines": [
+              {
+                "number": 1,
+                "text": "keep-me"
+              },
+              {
+                "number": 2,
+                "text": "TARGET-LINE   "
+              },
+              {
+                "number": 3,
+                "text": "neighbour"
+              }
+            ],
+            "totalLines": 3
+          }
+        },
+        {
+          "key": "read:1",
+          "dshTool": "read",
+          "isError": true,
+          "text": "Error: cannot read \"/home/user/.dsh/lan-agent-memory/projects/-/memory/26f4d39fdf5f334d/session_notes.md\": not found"
+        }
+      ],
+      "note": "One success, one failure: the canonical answer keeps both, with a per-path failure string."
+    },
+    {
+      "id": "read_files/all-fail",
+      "kind": "dsh",
+      "vendor": "read_files",
+      "cwd": "/workspace",
+      "arguments": {
+        "paths": [
+          "/home/user/.dsh/lan-agent-memory/projects/-/memory/26f4d39fdf5f334d/session_notes.md",
+          "/home/user/.dsh/lan-agent-memory/projects/-/memory/8549f69c693ae3b0/session_notes.md"
+        ]
+      },
+      "calls": [
+        {
+          "key": "read:0",
+          "dshTool": "read",
+          "isError": true,
+          "text": "Error: cannot read \"/home/user/.dsh/lan-agent-memory/projects/-/memory/26f4d39fdf5f334d/session_notes.md\": not found"
+        },
+        {
+          "key": "read:1",
+          "dshTool": "read",
+          "isError": true,
+          "text": "Error: cannot read \"/home/user/.dsh/lan-agent-memory/projects/-/memory/8549f69c693ae3b0/session_notes.md\": not found"
+        }
+      ],
+      "note": "Every path failed: the canonical answer is a top-level error envelope."
+    },
+    {
+      "id": "list_files/success",
+      "kind": "dsh",
+      "vendor": "list_files",
+      "cwd": "/workspace",
+      "arguments": {
+        "path": "/home/user/.dsh/probe",
+        "recursive": false
+      },
+      "calls": [
+        {
+          "key": "glob",
+          "dshTool": "glob",
+          "isError": false,
+          "text": "probe/audit-peek.mjs\nprobe/session-e44ab00b-turn1-compressed.md",
+          "value": {
+            "root": "probe",
+            "paths": [
+              "probe/audit-peek.mjs",
+              "probe/session-e44ab00b-turn1-compressed.md"
+            ]
+          }
+        }
+      ],
+      "note": "Glob publishes paths in value; the rendered text is one path per line."
+    },
+    {
+      "id": "list_files/empty",
+      "kind": "dsh",
+      "vendor": "list_files",
+      "cwd": "/workspace",
+      "arguments": {
+        "path": "/workspace/empty",
+        "recursive": false
+      },
+      "calls": [
+        {
+          "key": "glob",
+          "dshTool": "glob",
+          "isError": false,
+          "text": "No files found",
+          "value": {
+            "root": "local-plugins/dsh-provider-lan-agent",
+            "paths": []
+          }
+        }
+      ],
+      "note": "Empty glob: vendor expects an empty JSON array, not \"No files found\"."
+    },
+    {
+      "id": "search_files/grep",
+      "kind": "dsh",
+      "vendor": "search_files",
+      "cwd": "/workspace",
+      "arguments": {
+        "claude_name": "Grep",
+        "pattern": "readMemoryInfo|collectEnvironment|memoryRoot|get_environment_info",
+        "path": "/home/user/.dsh/local-plugins/dsh-provider-lan-agent/index.js"
+      },
+      "calls": [
+        {
+          "key": "grep",
+          "dshTool": "grep",
+          "isError": false,
+          "text": "Found 1 match\n\nlocal-plugins/dsh-provider-lan-agent/index.js\nLine 1058:       memoryRoot: memoryMapping === undefined ? '' : `${String(memoryMapping.to).replace(/\\/+$/, '')}/projects/-/memory`,",
+          "value": {
+            "matches": [
+              {
+                "path": "local-plugins/dsh-provider-lan-agent/index.js",
+                "lineNumber": 1058,
+                "line": "      memoryRoot: memoryMapping === undefined ? '' : `${String(memoryMapping.to).replace(/\\/+$/, '')}/projects/-/memory`,"
+              }
+            ]
+          }
+        }
+      ],
+      "note": "DSH renders \"Found N matches / path / Line N: text\"; value.matches carries the same data."
+    },
+    {
+      "id": "search_files/glob",
+      "kind": "dsh",
+      "vendor": "search_files",
+      "cwd": "/workspace",
+      "arguments": {
+        "claude_name": "Glob",
+        "pattern": "*",
+        "path": "/home/user/.dsh/probe"
+      },
+      "calls": [
+        {
+          "key": "glob",
+          "dshTool": "glob",
+          "isError": false,
+          "text": "probe/audit-peek.mjs\nprobe/session-e44ab00b-turn1-compressed.md",
+          "value": {
+            "root": "probe",
+            "paths": [
+              "probe/audit-peek.mjs",
+              "probe/session-e44ab00b-turn1-compressed.md"
+            ]
+          }
+        }
+      ],
+      "note": "Glob mode returns a JSON array of workspace-relative paths."
+    },
+    {
+      "id": "write_to_file/success",
+      "kind": "dsh",
+      "vendor": "write_to_file",
+      "cwd": "/workspace",
+      "arguments": {
+        "path": "/home/user/.dsh/lan-agent-memory/projects/-/memory/probe-mapping.md",
+        "content": "MAPPING-PROBE-OK\n"
+      },
+      "calls": [
+        {
+          "key": "write",
+          "dshTool": "write",
+          "isError": false,
+          "text": "<path>/home/user/.dsh/lan-agent-memory/projects/-/memory/probe-mapping.md</path>\n<type>file</type>\n<content>\nCreated file\n</content>",
+          "value": {
+            "path": "/home/user/.dsh/lan-agent-memory/projects/-/memory/probe-mapping.md",
+            "operation": "create",
+            "before": null,
+            "after": "MAPPING-PROBE-OK\n"
+          }
+        }
+      ],
+      "note": "The vendor client answers with the bare literal \"success\"; the rendered text is not sent."
+    },
+    {
+      "id": "replace_in_file/exact",
+      "kind": "dsh",
+      "vendor": "replace_in_file",
+      "cwd": "/workspace",
+      "arguments": {
+        "path": "/workspace/exact.txt",
+        "diff": "------- SEARCH\nTARGET-LINE\n=======\nEXACT-DONE\n+++++++ REPLACE"
+      },
+      "documents": {
+        "/workspace/exact.txt": "keep-me\nTARGET-LINE\nneighbour\n"
+      },
+      "calls": [
+        {
+          "key": "edit:0",
+          "dshTool": "edit",
+          "isError": false,
+          "text": "The file /workspace/exact.txt has been updated successfully.",
+          "value": {
+            "path": "/workspace/exact.txt",
+            "before": "keep-me\nTARGET-LINE\nneighbour\n",
+            "after": "keep-me\nEXACT-DONE\nneighbour\n"
+          }
+        }
+      ],
+      "expectedPlan": {
+        "calls": [
+          {
+            "key": "edit:0",
+            "dshTool": "edit",
+            "arguments": {
+              "file_path": "/workspace/exact.txt",
+              "old_string": "TARGET-LINE",
+              "new_string": "EXACT-DONE"
+            }
+          }
+        ]
+      },
+      "note": "Synthetic exact case; the fuzzy case below is harvested. Both must plan the same kind of edit."
+    },
+    {
+      "id": "replace_in_file/fuzzy",
+      "kind": "dsh",
+      "vendor": "replace_in_file",
+      "cwd": "/workspace",
+      "arguments": {
+        "path": "/workspace/fuzzy.txt",
+        "diff": "------- SEARCH\nTARGET-LINE\n=======\nFUZZY-DONE\n+++++++ REPLACE"
+      },
+      "documents": {
+        "/workspace/fuzzy.txt": "keep-me\nTARGET-LINE   \nneighbour\n"
+      },
+      "calls": [
+        {
+          "key": "edit:0",
+          "dshTool": "edit",
+          "isError": false,
+          "text": "The file /workspace/fuzzy.txt has been updated successfully.",
+          "value": {
+            "path": "/workspace/fuzzy.txt",
+            "before": "keep-me\nTARGET-LINE   \nneighbour\n",
+            "after": "keep-me\nFUZZY-DONE\nneighbour\n"
+          }
+        }
+      ],
+      "expectedPlan": {
+        "calls": [
+          {
+            "key": "edit:0",
+            "dshTool": "edit",
+            "arguments": {
+              "file_path": "/workspace/fuzzy.txt",
+              "old_string": "TARGET-LINE   ",
+              "new_string": "FUZZY-DONE"
+            }
+          }
+        ]
+      },
+      "note": "The file has trailing spaces the vendor did not send; plan-time resolution must use the literal line."
+    },
+    {
+      "id": "use_mcp_tool/toolbox",
+      "kind": "dsh",
+      "vendor": "use_mcp_tool",
+      "cwd": "/workspace",
+      "arguments": {
+        "server_name": "dsh_toolbox",
+        "tool_name": "list_ports",
+        "arguments": {}
+      },
+      "calls": [
+        {
+          "key": "mcp",
+          "dshTool": "mcp__serial__list_ports",
+          "isError": false,
+          "text": "Found 4 serial ports:\n- COM9: Serial Port\n- COM12: Serial Port\n- COM4: FTDI USB Serial Port (COM4) (USB VID:0403 PID:6001)\n- COM41: wch.cn USB-SERIAL CH340 (COM41) (USB VID:1A86 PID:7523)",
+          "value": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Found 4 serial ports:\n- COM9: Serial Port\n- COM12: Serial Port\n- COM4: FTDI USB Serial Port (COM4) (USB VID:0403 PID:6001)\n- COM41: wch.cn USB-SERIAL CH340 (COM41) (USB VID:1A86 PID:7523)"
+              }
+            ]
+          }
+        }
+      ],
+      "note": "A bare toolbox name resolves to mcp__serial__list_ports; the answer is the rendered content."
+    },
+    {
+      "id": "use_mcp_tool/external",
+      "kind": "dsh",
+      "vendor": "use_mcp_tool",
+      "cwd": "/workspace",
+      "arguments": {
+        "server_name": "claw",
+        "tool_name": "claw_grep",
+        "arguments": {
+          "host": "local",
+          "pattern": "needle",
+          "path": "/workspace"
+        }
+      },
+      "calls": [
+        {
+          "key": "mcp",
+          "dshTool": "mcp__claw__claw_grep",
+          "isError": false,
+          "text": "No matches found.",
+          "value": {
+            "content": [
+              {
+                "type": "text",
+                "text": "No matches found."
+              }
+            ]
+          }
+        }
+      ],
+      "note": "A real MCP server name keeps its mcp__<server>__<tool> prefix."
+    },
+    {
+      "id": "run_code/direct",
+      "kind": "dsh",
+      "vendor": "run_code",
+      "cwd": "/workspace",
+      "arguments": {
+        "description": "Write task list for memory error fix",
+        "code": "const r = await tools.todo_write({ todos: [\n  { content: \"检查插件现状：工具工厂/路径映射/记忆读取的实现与报错来源\", status: \"in_progress\" },\n  { content: \"设计并落地一个可复现读取报错的测试方法（真实工作区+审计日志）\", status: \"pending\" },\n  { content: \"跑基线测试，确认报错在当前代码下仍复现\", status: \"pending\" },\n  { content: \"修复：让记忆路径的读写在任何工作区都不再产生界面报错\", status: \"pending\" },\n  { content: \"复测验证修复生效，并更新 rosemary 记忆\", status: \"pending\" }\n] });\nconsole.log(JSON.stringify(r.counts));"
+      },
+      "calls": [
+        {
+          "key": "run_code",
+          "dshTool": "run_code",
+          "isError": false,
+          "text": "{\"pending\":4,\"inProgress\":1,\"completed\":0}"
+        }
+      ],
+      "note": "DSH vocabulary passed through; text is the program rendering."
+    },
+    {
+      "id": "get_environment_info/local",
+      "kind": "local",
+      "vendor": "get_environment_info",
+      "cwd": "/workspace",
+      "arguments": {},
+      "calls": [],
+      "note": "The preflight is answered locally: no DSH call, no approval, no card."
+    },
+    {
+      "id": "refusal/ask_followup_question",
+      "kind": "refusal",
+      "vendor": "ask_followup_question",
+      "cwd": "/workspace",
+      "arguments": {
+        "question": "Continue?"
+      },
+      "calls": [],
+      "note": "Vendor interaction tools stay unsupported in v1; refusal text comes from the registry entry.",
+      "observed": {
+        "isError": true,
+        "text": "unsupported tool name"
+      }
+    },
+    {
+      "id": "refusal/missing-arguments",
+      "kind": "refusal",
+      "vendor": "read_files",
+      "cwd": "/workspace",
+      "arguments": {
+        "paths": []
+      },
+      "calls": [],
+      "note": "Empty paths: a plan-time refusal, before any DSH call."
+    },
+    {
+      "id": "refusal/unknown-tool",
+      "kind": "refusal",
+      "vendor": "no_such_vendor_tool",
+      "cwd": "/workspace",
+      "arguments": {
+        "anything": true
+      },
+      "calls": [],
+      "note": "Unknown names are refused with the list of names the vendor may use."
+    }
+  ]
+}
