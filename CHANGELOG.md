@@ -22,6 +22,13 @@
   no text blocks, instead of returning raw JSON.
 - Path mapping and the local preflight moved into the seam; `index.js` passes
   raw vendor arguments to the bridge.
+- **The loop route now uses the same seam.** `planVendorCall` / `planNative` /
+  `shapeLoopResults` are gone; the loop wraps the seam plan in the transport a
+  presentation accepts (native calls or one `run_code` program) and renders with
+  the same shape table as the bridge.
+- The generated program no longer carries the tolerant-edit helper: the plan
+  already resolved SEARCH/REPLACE to exact `edit` calls. A PTC style retry
+  reuses the same plan instead of re-interpreting (and re-reading) the request.
 
 ### Added
 

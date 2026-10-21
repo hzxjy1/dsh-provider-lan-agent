@@ -40,7 +40,7 @@ import { createAuditWriter } from './src/audit.js'
 import { readAuditTail } from './src/auditFeed.js'
 import { DispatchMode, createToolDispatcher } from './src/dispatch.js'
 import { requestApproval, requiresApproval } from './src/approval.js'
-import { LOOP_EXCLUDED, isToolRefusal, looksLikePtcPrompt, planVendorCall, shapeLoopResults } from './src/loopPlan.js'
+import { LOOP_EXCLUDED, isToolRefusal, looksLikePtcPrompt, outcomesForPlan, withStyle } from './src/loopPlan.js'
 import { mapCommandText, mapPath, mapVendorPaths, resolveMappings, VENDOR_MEMORY_ROOT } from './src/paths.js'
 import { answerMemoryOp } from './src/memory.js'
 import { createLoopRoute, drainWithSuspension, extractToolResults, isLoopContinuation, toolCallChunks } from './src/loopRoute.js'
@@ -49,6 +49,8 @@ import { createLoopRoute, drainWithSuspension, extractToolResults, isLoopContinu
 const VENDOR_BUSY_RETRY_MS = 3000
 import { DEFAULT_TOOLBOX_NAME, DEFAULT_WHITELIST, buildToolboxServers, completeToolboxSchemas } from './src/toolbox.js'
 import { createToolBridge } from './src/vendor/bridge.js'
+import { createDocumentReader } from './src/vendor/documents.js'
+import { interpret, render } from './src/vendor/registry.js'
 import { collectEnvironment, readMemoryInfo } from './src/tools.js'
 import { ToolChannel, createRefusingHandler } from './src/ws.js'
 
@@ -548,7 +550,8 @@ class LanAgentAdapter {
   *#emitToolCalls(state, mapper) {
     let index = mapper?.nextBlockIndex?.() ?? 0
     for (const call of state.calls) {
-      for (const planned of call.plan.calls) {
+      const transport = call.plan.transportCalls ?? call.plan.calls
+      for (const planned of transport) {
         const callId = `${call.baseCallId}:${planned.key}`
         call.ids.set(planned.key, callId)
         for (const chunk of toolCallChunks({ callId, name: planned.dshTool, arguments: planned.arguments, index })) {
@@ -574,76 +577,65 @@ class LanAgentAdapter {
     let handedOn = false
     for (const call of parked.calls) {
       clearTimeout(call.timer)
+      const plan = call.plan
+      const outcomes = outcomesForPlan(plan, results, call.ids)
       if (call.answered) {
         // The budget already answered this call. The loop's result still arrives
         // here — record it, or "parked and never resumed" stays indistinguishable
         // from "executed too late to matter" (design notes §28).
-        const late = new Map()
-        for (const planned of call.plan.calls) {
-          late.set(planned.key, results.get(String(call.ids.get(planned.key))) ?? { text: '', isError: true })
-        }
-        const shapedLate = shapeLoopResults(call.plan, late, { cwd })
+        const answer = render(plan, outcomes, { cwd })
         this.audit?.({
           name: call.vendorTool,
-          args: call.plan.calls[0]?.arguments,
-          ok: shapedLate.error === undefined && !shapedLate.content[0].text.includes('未完成'),
+          args: plan.mappedArguments ?? plan.calls[0]?.arguments,
+          ok: answer.error === undefined && !String(answer.content?.[0]?.text ?? '').includes('未完成'),
           route: 'loop-late',
-          dshTool: call.plan.calls.map((planned) => planned.dshTool).join(','),
+          dshTool: plan.calls.map((planned) => planned.dshTool).join(','),
           detail: `结果在预算到期后才返回（${Date.now() - (call.parkedAt ?? Date.now())}ms）`,
-          ...shapedLate.error === undefined ? { summary: String(shapedLate.content[0]?.text ?? '').slice(0, 240) } : { detail: `迟到且失败：${shapedLate.error.message}` },
+          ...answer.error === undefined
+            ? { summary: String(answer.content?.[0]?.text ?? '').slice(0, 240) }
+            : { detail: `迟到且失败：${answer.error.message}` },
         })
         continue
       }
-      const byKey = new Map()
-      for (const planned of call.plan.calls) {
-        byKey.set(planned.key, results.get(String(call.ids.get(planned.key))) ?? { text: '', isError: true })
-      }
-      // A PTC session presents only `run_code`, so the first direct name comes
-      // back as an unknown-tool refusal. Learn that and hand the same call over
-      // again as a generated program: the vendor's own request never has to fail
-      // for a presentation detail it cannot see.
+      // A PTC session presents only `run_code`, so the first native-style call
+      // comes back as an unknown-tool refusal. Learn that and hand the SAME plan
+      // over as a generated program: no re-interpretation, no second file read.
+      const outer = plan.style === 'run_code'
+        ? results.get(String(call.ids.get(plan.transportCalls[0].key)))
+        : undefined
+      const refused = plan.style === 'run_code'
+        ? isToolRefusal(outer ?? { text: '', isError: true })
+        : plan.calls.some((planned) => isToolRefusal(outcomes.get(planned.key)))
       const attempts = call.attempts ?? 1
-      // `vendorArgs` lives on the parked RECORD, not on the plan (only a
-      // run_code plan carries its own copy) — testing `call.plan.vendorArgs`
-      // made this condition permanently false for native plans.
-      if (attempts < 2 && call.vendorArgs !== undefined && call.plan.calls.some((planned) => isToolRefusal(byKey.get(planned.key)))) {
-        // The style that just failed is wrong for this presentation; try the
-        // other one. (PTC refuses direct names; a native session refuses
-        // run_code — either way one retry settles it.)
-        const nextStyle = call.plan.style === 'run_code' ? 'native' : 'run_code'
-        const replan = planVendorCall(call.vendorTool, call.vendorArgs ?? {}, {
-          cwd,
-          toolboxName: this.toolboxName,
-          style: nextStyle,
+      if (attempts < 2 && call.vendorArgs !== undefined && refused) {
+        const nextStyle = plan.style === 'run_code' ? 'native' : 'run_code'
+        const replan = withStyle(plan, nextStyle)
+        this.loopStyle.set(routeKey, nextStyle)
+        const spent = Date.now() - (call.parkedAt ?? Date.now())
+        this.logger?.warn?.(`lanagent: ${call.vendorTool} was refused by the presentation; re-running it with the ${nextStyle} style`)
+        this.loopRoute.park(routeKey, {
+          ...call,
+          plan: replan,
+          attempts: attempts + 1,
+          budgetMs: Math.max(15_000, (call.budgetMs ?? 240_000) - spent),
         })
-        if (replan.error === undefined) {
-          this.loopStyle.set(routeKey, nextStyle)
-          const spent = Date.now() - (call.parkedAt ?? Date.now())
-          this.logger?.warn?.(`lanagent: ${call.vendorTool} was refused by the presentation; re-running it with the ${nextStyle} style`)
-          this.loopRoute.park(routeKey, {
-            ...call,
-            plan: replan,
-            attempts: attempts + 1,
-            budgetMs: Math.max(15_000, (call.budgetMs ?? 240_000) - spent),
-          })
-          reparked = true
-          continue
-        }
-        this.logger?.warn?.(`lanagent: ${call.vendorTool} cannot be re-run as a program (${replan.error})`)
-      } else if (attempts >= 2 && call.plan.calls.some((planned) => isToolRefusal(byKey.get(planned.key)))) {
-        // Both styles were refused: stop retrying and tell the vendor's model the
+        reparked = true
+        continue
+      }
+      if (attempts >= 2 && refused) {
+        // Both styles were refused: stop retrying and tell the agent's model the
         // truth, instead of feeding it a refusal as if it were a tool result.
         this.logger?.warn?.(`lanagent: ${call.vendorTool} is refused in every call style this session offers; reporting the refusal`)
       }
       call.answered = true
-      const shaped = shapeLoopResults(call.plan, byKey, { cwd })
+      const shaped = render(plan, outcomes, { cwd })
       const summary = shaped.content?.[0]?.text ?? ''
       this.audit?.({
         name: call.vendorTool,
-        args: call.plan.calls[0]?.arguments,
+        args: plan.mappedArguments ?? plan.calls[0]?.arguments,
         ok: shaped.error === undefined,
         route: 'loop',
-        dshTool: call.plan.calls.map((planned) => planned.dshTool).join(','),
+        dshTool: plan.calls.map((planned) => planned.dshTool).join(','),
         durationMs: Date.now() - (call.parkedAt ?? Date.now()),
         ...shaped.error === undefined
           ? { summary: summary.length <= 240 ? summary : `${summary.slice(0, 240)}…` }
@@ -1111,6 +1103,9 @@ export function apply(ctx, config) {
     // with the unresolved literal while writes landed somewhere else.
     const resolvedMappings = resolveMappings(pathMappings, cwd)
     const memoryMapping = resolvedMappings[0]
+    // Plan-time SEARCH/REPLACE resolution reads only inside the workspace and
+    // the mapping targets; the loop and the bridge share this reader.
+    const readDocument = createDocumentReader(cwd ?? process.cwd(), resolvedMappings)
     const bridge = createToolBridge({
       cwd,
       mappings: resolvedMappings,
@@ -1118,6 +1113,7 @@ export function apply(ctx, config) {
       onExecuted,
       audit,
       toolboxName: mcpToolboxName,
+      readDocument,
       // The preflight is a local answer: the seam asks for it only when the
       // vendor sends get_environment_info, and the answer names the same memory
       // tree the local memory responder writes.
@@ -1243,25 +1239,28 @@ export function apply(ctx, config) {
         //    tree never reach this point: answerMemoryOp answered them above.)
         if (loop !== undefined && loop.mode === 'loop') {
           const vendorTool = vendorName
-          const input = mappedInput
           if (!LOOP_EXCLUDED.has(vendorTool)) {
-            const planned = planVendorCall(vendorTool, input, {
+            // The seam maps and plans; the loop only wraps the plan in the
+            // transport this presentation accepts (native calls or one program).
+            const seamPlan = await interpret(vendorTool, rawInput, {
               cwd,
+              mappings: turnMappings,
               toolboxName: loop.toolboxName,
-              style: loop.styleFor(),
               resolveTool: loop.resolveTool,
               availableTools: loop.availableTools,
+              readDocument,
             })
-            if (planned.error === undefined) {
-              const declared = Number(input.timeout)
-              // The vendor's own per-tool timeout is honoured, but never beyond
+            if (seamPlan.kind === 'dsh') {
+              const planned = withStyle(seamPlan, loop.styleFor())
+              const declared = Number(rawInput.timeout)
+              // The agent's own per-tool timeout is honoured, but never beyond
               // our cap (design notes §26): a stuck parked turn must expire.
               const budgetMs = Number.isFinite(declared) && declared > 0 ? Math.min(declared, loop.budgetMs) : loop.budgetMs
               loop.route.park(loop.sessionKey, {
                 baseCallId: callId,
                 plan: planned,
                 vendorTool,
-                vendorArgs: input,
+                vendorArgs: seamPlan.mappedArguments ?? rawInput,
                 budgetMs,
                 ids: new Map(),
                 parkedAt: Date.now(),
@@ -1270,19 +1269,30 @@ export function apply(ctx, config) {
               })
               audit?.({
                 name: vendorTool,
-                args: input,
+                args: seamPlan.mappedArguments ?? rawInput,
                 ok: null,
                 route: 'loop',
                 dshTool: [
                   ...planned.calls.map((plannedCall) => plannedCall.dshTool),
-                  ...(planned.nativeCalls ?? []).map((native) => `→${native.dshTool}`),
+                  ...planned.style === 'run_code' ? [`→${planned.transportCalls[0].dshTool}`] : [],
                 ].join(','),
                 detail: 'parked for the agent loop',
               })
               logger?.debug?.(`lanagent: ${vendorTool} parked for the agent loop (${planned.calls.length} DSH call(s), budget ${Math.round(budgetMs / 1000)}s)`)
               return { deferred: true }
             }
-            logger?.warn?.(`lanagent: ${vendorTool} cannot use the loop route (${planned.error}); using the out-of-band route`)
+            const immediate = render(seamPlan, new Map(), { cwd })
+            audit?.({
+              name: vendorTool,
+              args: seamPlan.mappedArguments ?? rawInput,
+              ok: immediate.error === undefined,
+              route: 'loop',
+              dshTool: seamPlan.kind === 'local' ? '(local)' : '',
+              ...immediate.error === undefined
+                ? { summary: String(immediate.content?.[0]?.text ?? '').slice(0, 240) }
+                : { detail: immediate.error.message },
+            })
+            return immediate
           }
         }
 

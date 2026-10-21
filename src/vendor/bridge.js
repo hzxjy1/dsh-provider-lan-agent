@@ -13,10 +13,8 @@
  * @module src/vendor/bridge
  */
 
-import { readFile } from 'node:fs/promises'
-import { isAbsolute, resolve } from 'node:path'
-
 import { collectEnvironment, contentText, readMemoryInfo } from '../tools.js'
+import { createDocumentReader } from './documents.js'
 import { interpret, render } from './registry.js'
 
 /** Clip the human summary recorded in the audit trail. */
@@ -25,32 +23,6 @@ function summarize(answer) {
     ? String(answer.error.message ?? '')
     : (answer?.content ?? []).map((block) => (block?.type === 'text' ? String(block.text ?? '') : '')).join(' ')
   return text.length <= 240 ? text : `${text.slice(0, 240)}…`
-}
-
-/** Is `path` inside `root` (segment boundary, not string prefix)? */
-function inside(path, root) {
-  const base = String(root ?? '').replace(/\/+$/, '')
-  return base.length > 0 && (path === base || path.startsWith(`${base}/`))
-}
-
-/**
- * Read a file for plan-time SEARCH/REPLACE resolution.
- *
- * Reads are limited to the session workspace and the resolved mapping targets:
- * the resolver must not become a way to read a file the sandboxed `edit` would
- * refuse. Outside that set the plan is refused with the vendor's own guidance.
- */
-function createDocumentReader(workspace, mappings) {
-  const roots = [workspace, ...mappings.map((mapping) => mapping.to)].filter((root) => typeof root === 'string' && root.length > 0)
-  return async (path) => {
-    const absolute = isAbsolute(path) ? path : resolve(workspace, path)
-    if (!roots.some((root) => inside(absolute, isAbsolute(root) ? root : resolve(workspace, root)))) return undefined
-    try {
-      return await readFile(absolute, 'utf8')
-    } catch {
-      return undefined
-    }
-  }
 }
 
 /**

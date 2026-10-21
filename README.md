@@ -33,12 +33,12 @@ WS    /ws-api/coagent/<session_id>  → 服务端的工具调用，在本进程�
 | 流解析：拼接 JSON 解析 + 累积快照差分 → DSH `StreamChunk`；`task_status` 收尾；usage 映射 | ✅ M1 |
 | 工具通道：每轮开 WS、心跳、按 `block_id` 关联、软超时 | ✅ M1 |
 | **工具桥：厂商 8 个内置工具 → DSH 工具，经 `ctx.tools.execute()`（审批/沙箱归 DSH）** | ✅ M2 |
-| 厂商请求 seam：`interpret` → plan / local / refusal，`render` 统一整形（bridge 已接入；loop 待迁） | ✅ M4 |
+| 厂商请求 seam：`interpret` → plan / local / refusal，`render` 统一整形（bridge + loop 均已接入） | ✅ M4 |
 | `use_mcp_tool` → DSH `mcp__<server>__<tool>` 的翻译 | ✅ M2 |
 | MCP 工具**清单注入**（让厂商模型知道自己有哪些 MCP 工具可调） | ✅ M3 |
 | 旁路轻量通道（session-title / compaction） | ✅ M1 |
 
-**验收证据**：`node --test` **229 项全绿**（协议/认证/目录/工具翻译/派发/审计 + 19 个真实 fixture 的契约测试）；
+**验收证据**：`node --test` **214 项全绿**（协议/认证/目录/工具翻译/派发/审计 + 19 个真实 fixture 的契约测试）；
 真实服务验证脚本保留在本地，不随仓库发布；
 GUI 模型选择器出现 `LAN Agent` 与 6 个模型；**真实 GUI 会话端到端跑通**
 （厂商 agent 调 `execute_command` → 桥 → DSH 真跑 `pwd && ls api-reference.md && date +%s` → 输出正确，
@@ -136,7 +136,7 @@ EOF
 ## 测试
 
 ```sh
-node --test                        # 229 项离线测试：解析/差分/投影/rules/认证/目录 + 工具翻译 + 契约 fixture（无需锚点）
+node --test                        # 214 项离线测试：解析/差分/投影/rules/认证/目录 + 工具翻译 + 契约 fixture（无需锚点）
 node --test test/contract/*.test.mjs  # 只跑契约测试：19 个 case，value 与 text-only 两种 outcome
 ```
 

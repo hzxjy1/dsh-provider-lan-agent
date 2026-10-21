@@ -43,10 +43,12 @@ Both runners feed the same `render`.
 ### Result fidelity
 
 The bridge receives a structured `value` from `ctx.tools.execute()`; the loop
-receives only the rendered `text` from DSH's tool-result message. The seam
-normalizes both to `{ text, isError, value? }` and `src/vendor/shape.js` prefers
-`value`, falling back to parsing the exact DSH renderings. The contract tests
-render every fixture twice and require the same answer.
+receives the rendered `text` from DSH's tool-result message. A loop call wrapped
+in a program also carries a structured value inside the sentinel payload, which
+`outcomesForPlan` recovers. The seam normalizes both routes to
+`{ text, isError, value? }`; `src/vendor/shape.js` prefers `value`, falling back
+to parsing the exact DSH renderings. The contract tests render every fixture
+twice and require the same answer.
 
 ### Path mapping
 
