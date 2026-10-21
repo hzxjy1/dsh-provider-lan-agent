@@ -114,7 +114,7 @@ export const inject = ['llm']
 const DEFAULT_ROUTE = 'lanagent'
 /** Same-origin route the settings panel reads the audit tail from. */
 const AUDIT_ROUTE = '/lanagent/audit'
-const DEFAULT_BASE_URL = 'https://10.219.9.56'
+const DEFAULT_BASE_URL = 'http://10.219.9.56'
 
 /**
  * The vendor's memory tree maps into the session workspace by default.
@@ -140,7 +140,7 @@ const DEFAULT_PATH_MAPPINGS = Object.freeze([{ from: VENDOR_MEMORY_ROOT, to: '.l
 function buildConfig(z) {
   return z.object({
     route: z.string().default(DEFAULT_ROUTE).description('Provider route name requests select.'),
-    baseURL: z.string().default(DEFAULT_BASE_URL).description('Vendor origin; beta is https://10.219.9.56.'),
+    baseURL: z.string().default(DEFAULT_BASE_URL).description('Vendor origin; beta is http://10.219.9.56.'),
     user: z.string().default('').description('Optional plain-config account name. Prefer auth.userRef, which keeps the account out of deployment files; this field is only a fallback.'),
     auth: z.object({
       mode: z.union([z.const('login'), z.const('token')]).default('login')

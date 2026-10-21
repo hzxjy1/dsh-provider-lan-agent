@@ -16,7 +16,7 @@
       name: '@local/dsh-provider-lan-agent'
       config:
         route: lanagent
-        baseURL: https://10.219.9.56
+        baseURL: http://10.219.9.56
         # The account is treated as hidden information: it lives in the
         # credential store behind auth.userRef, exactly like the password, so it
         # does not appear in any deployment file. The plain-config `user:` field

@@ -1,6 +1,6 @@
 # @local/dsh-provider-lan-agent
 
-把局域网内的 agent 服务（`https://10.219.9.56`）接成 DSH 的一个原生 LLM provider 路由 `lanagent`。
+把局域网内的 agent 服务（`http://10.219.9.56`）接成 DSH 的一个原生 LLM provider 路由 `lanagent`。
 
 架构与厂商请求 seam 见 [ARCHITECTURE.md](./ARCHITECTURE.md)；离线契约测试见 [test/contract/](./test/contract/)。
 

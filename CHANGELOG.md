@@ -36,6 +36,8 @@
   `request` and `settled` rows with the same id, and the bridge emits `settled`.
 - `scripts.test` / `scripts.test:contract`, an MIT license, Node engine metadata,
   and the shipped documentation in `files`.
+- The shipped base URL is the LAN origin over HTTP, because the service's
+  certificate does not cover the IP. Use it only on a trusted network.
 
 - `test/contract/fixtures.json`: 19 cases harvested from real lanagent sessions
   (66 sessions, 455 text+value pairs), sanitized for paths/accounts/session ids.

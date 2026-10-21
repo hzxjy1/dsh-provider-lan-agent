@@ -95,7 +95,8 @@ route.
 ## Configuration and credentials
 
 - The row is `llm-lan-agent` in `cordis.patch.yml`; the base URL is the LAN
-  address.
+  address. The service's certificate does not cover the IP, so the LAN origin is
+  plain HTTP: run it only on a trusted network.
 - Account and password are credential references (`LAN_AGENT_USER`,
   `LAN_AGENT_PASSWORD`), never plaintext in the patch.
 - `pathMappings` defaults to the agent CLI's home mapped to
