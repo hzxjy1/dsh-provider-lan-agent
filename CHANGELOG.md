@@ -2,6 +2,13 @@
 
 ## 1.1.0 — 2026-10-21
 
+### Migration
+
+- This release renames the provider route and the credential references. When
+  upgrading, copy the account and password values to `LAN_AGENT_USER` and
+  `LAN_AGENT_PASSWORD` (the web Models page writes them), and point the default
+  model provider at `lanagent`. The previous reference names are no longer read.
+
 ### Changed
 
 - **The out-of-band bridge now runs through the vendor-request seam**
