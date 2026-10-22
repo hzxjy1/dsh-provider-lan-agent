@@ -7,8 +7,9 @@
 - Map the service's dedicated `thinking` blocks to DSH reasoning chunks
   (`block-start` / `reasoning-delta` / `block-end`). The GUI can now show the
   collapsible thinking section the desktop client shows, instead of dropping it.
-  `thinkMode` still controls whether the service is asked to think; `auto` sends
-  `think: yes` only when DSH requests a reasoning effort.
+  `thinkMode` still controls whether the service is asked to think; the shipped
+  row sets `on` so the section is visible out of the box. `auto` asks only when
+  DSH requests a reasoning effort; `off` never asks.
 
 ## 1.1.2 — 2026-10-22
 

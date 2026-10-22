@@ -40,8 +40,10 @@
         # rules: pass the DSH system prompt through the `rules` channel.
         # none:  rely on the vendor's own system prompt only.
         systemPromptMode: rules
-        # auto: think=yes only when DSH asks for a reasoning effort.
-        thinkMode: auto
+        # on: always ask the service to think, so the GUI's reasoning section is
+        # populated (the desktop client's thinking toggle equivalent). auto asks
+        # only when DSH requests a reasoning effort; off never asks.
+        thinkMode: on
         # light: session-title / compaction calls run without the tool channel
         #        and with an instruction not to call tools.
         purposePolicy: light
