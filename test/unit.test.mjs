@@ -56,6 +56,7 @@ test('parser: an incomplete object is carried, an undecodable complete one is a 
 /* ── stream mapping ──────────────────────────────────────────────────────── */
 
 const textObject = (id, content) => ({ code: '0', data: { block: [{ id, type: 'text', content, partial: false }] } })
+const thinkingObject = (id, content) => ({ code: '0', data: { block: [{ id, type: 'thinking', content }] } })
 
 test('mapper: cumulative snapshots become deltas that reconstruct the text', () => {
   const mapper = createStreamMapper()
@@ -129,6 +130,36 @@ test('mapper: a real answer that merely mentions "Generating" is kept verbatim',
   ]
   const ends = chunks.filter((chunk) => chunk.type === 'block-end')
   assert.deepEqual(ends.map((chunk) => chunk.block.text), [mixed, quoted, longTool, mixedLong])
+})
+
+test('mapper: thinking blocks become reasoning deltas and a closed reasoning block', () => {
+  const mapper = createStreamMapper()
+  const chunks = [
+    ...mapper.mapObject(thinkingObject('th', 'step 1')),
+    ...mapper.mapObject(thinkingObject('th', 'step 1\nstep 2')),
+    ...mapper.mapObject(textObject('answer', 'final')),
+    ...mapper.mapObject({ code: '0', data: { task_status: 'completed' } }),
+  ]
+  const starts = chunks.filter((chunk) => chunk.type === 'block-start')
+  assert.deepEqual(starts.map((chunk) => chunk.blockType), ['reasoning', 'text'])
+  const deltas = chunks.filter((chunk) => chunk.type === 'reasoning-delta')
+  assert.equal(deltas.map((chunk) => chunk.text).join(''), 'step 1\nstep 2')
+  const reasoningEnd = chunks.find((chunk) => chunk.type === 'block-end' && chunk.block.type === 'reasoning')
+  assert.deepEqual(reasoningEnd.block, { type: 'reasoning', text: 'step 1\nstep 2' })
+  const textEnd = chunks.find((chunk) => chunk.type === 'block-end' && chunk.block.type === 'text')
+  assert.deepEqual(textEnd.block, { type: 'text', text: 'final' })
+  assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+})
+
+test('mapper: a thinking block is closed when the transport ends without a task status', () => {
+  const mapper = createStreamMapper()
+  const chunks = [
+    ...mapper.mapObject(thinkingObject('th', 'half')),
+    ...mapper.end(),
+  ]
+  assert.equal(chunks[0].blockType, 'reasoning')
+  assert.equal(chunks.some((chunk) => chunk.type === 'block-end' && chunk.block.type === 'reasoning'), true)
+  assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
 })
 
 test('mapper: tool_use yields no DSH chunk and is reported once per id', () => {

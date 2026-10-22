@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 — 2026-10-22
+
+### Added
+
+- Map the service's dedicated `thinking` blocks to DSH reasoning chunks
+  (`block-start` / `reasoning-delta` / `block-end`). The GUI can now show the
+  collapsible thinking section the desktop client shows, instead of dropping it.
+  `thinkMode` still controls whether the service is asked to think; `auto` sends
+  `think: yes` only when DSH requests a reasoning effort.
+
 ## 1.1.2 — 2026-10-22
 
 ### Fixed

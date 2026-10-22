@@ -100,6 +100,8 @@ const isToolNarration = (text) => TOOL_NARRATION.test(text.trim())
 export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
   /** @type {Map<string, {index: number, text: string, closed: boolean}>} */
   const texts = new Map()
+  /** @type {Map<string, {index: number, text: string, closed: boolean}>} */
+  const reasonings = new Map()
   /** @type {Set<string>} */
   const toolUseIds = new Set()
   const ignoredReported = new Set()
@@ -125,6 +127,25 @@ export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
       if (state.closed) continue
       state.closed = true
       chunks.push({ type: 'block-end', index: state.index, block: { type: 'text', text: state.text } })
+    }
+  }
+
+  const ensureReasoning = (key, chunks) => {
+    let state = reasonings.get(key)
+    if (state === undefined) {
+      state = { index: nextIndex, text: '', closed: false }
+      nextIndex += 1
+      reasonings.set(key, state)
+      chunks.push({ type: 'block-start', index: state.index, blockType: 'reasoning' })
+    }
+    return state
+  }
+
+  const closeReasonings = (chunks) => {
+    for (const state of reasonings.values()) {
+      if (state.closed) continue
+      state.closed = true
+      chunks.push({ type: 'block-end', index: state.index, block: { type: 'reasoning', text: state.text } })
     }
   }
 
@@ -175,6 +196,20 @@ export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
               }
             }
           }
+        } else if (block.type === 'thinking') {
+          // The service emits its reasoning as a separate cumulative `thinking`
+          // block, next to the visible answer. DSH has a distinct reasoning
+          // channel, so map it rather than dropping it (the desktop client shows
+          // exactly these blocks in its collapsible thinking panel).
+          const content = String(block.content ?? block.text ?? '')
+          if (content.length > 0) {
+            const key = typeof block.id === 'string' && block.id.length > 0 ? `thinking:${block.id}` : 'thinking-0'
+            const state = ensureReasoning(key, chunks)
+            if (!state.closed && content.length > state.text.length) {
+              chunks.push({ type: 'reasoning-delta', index: state.index, text: content.slice(state.text.length) })
+              state.text = content
+            }
+          }
         } else if (block.type === 'tool_use') {
           sawToolCalls = true
           const id = typeof block.id === 'string' ? block.id : ''
@@ -208,11 +243,13 @@ export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
 
       if (typeof data.task_status === 'string') {
         if (data.task_status === 'completed') {
+          closeReasonings(chunks)
           closeTexts(chunks)
           takeUsage(chunks)
           chunks.push({ type: 'finish', reason: { kind: finishReason === 'max-tokens' ? 'max-tokens' : 'stop' } })
           terminal = true
         } else if (data.task_status !== 'init' && data.task_status !== 'running') {
+          closeReasonings(chunks)
           closeTexts(chunks)
           takeUsage(chunks)
           chunks.push({
@@ -251,6 +288,7 @@ export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
     end(reason) {
       if (terminal) return []
       const chunks = []
+      closeReasonings(chunks)
       closeTexts(chunks)
       takeUsage(chunks)
       if (reason !== undefined) {

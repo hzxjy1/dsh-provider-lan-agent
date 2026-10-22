@@ -74,6 +74,16 @@ target is resolved per session, which keeps writes inside the file sandbox.
 approvals/sandbox policy stay in DSH. `out-of-band` uses the bridge and answers
 immediately.
 
+## Reasoning
+
+The service streams its hidden reasoning as separate `thinking` blocks next to
+the visible answer. The stream mapper turns them into DSH `reasoning` blocks
+(one reasoning block per service block id), so the GUI can render them in its
+collapsible thinking section. `thinkMode` decides whether the request asks for
+thinking at all (`auto` follows DSH's reasoning effort, `on` always asks, `off`
+never does). Projected history drops reasoning blocks: the service has no
+reasoning channel of its own, so sending them back would be invented context.
+
 ## Trace
 
 A parked step clears the request deadline; the step that resumes it links its own
