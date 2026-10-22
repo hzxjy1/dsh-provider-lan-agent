@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.1 — 2026-10-22
+
+### Fixed
+
+- Close the open text/reasoning blocks when a tool call ends a step. They used to
+  stay open until `task_status: completed`, so the final `block-end` replayed
+  every earlier step's text into the last assistant message: the final summary
+  was followed by the whole turn's intermediate narration. Each step's text now
+  ends in its own assistant message.
+
 ## 1.2.0 — 2026-10-22
 
 ### Added

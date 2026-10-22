@@ -211,6 +211,13 @@ export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
             }
           }
         } else if (block.type === 'tool_use') {
+          // A tool call ends the visible segment of THIS step. Close the open
+          // text/reasoning blocks now: if they stay open until task completion,
+          // the final `block-end` replays every earlier step's text into the
+          // last assistant message (measured: the final summary was followed by
+          // the whole turn's intermediate narration).
+          closeReasonings(chunks)
+          closeTexts(chunks)
           sawToolCalls = true
           const id = typeof block.id === 'string' ? block.id : ''
           if (id.length > 0 && !toolUseIds.has(id)) {

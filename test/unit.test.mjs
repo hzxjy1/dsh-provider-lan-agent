@@ -132,6 +132,25 @@ test('mapper: a real answer that merely mentions "Generating" is kept verbatim',
   assert.deepEqual(ends.map((chunk) => chunk.block.text), [mixed, quoted, longTool, mixedLong])
 })
 
+test('mapper: a tool call closes the current text block instead of replaying it at completion', () => {
+  const mapper = createStreamMapper()
+  const toolCall = { code: '0', data: { block: [{ id: 't1', type: 'tool_use', name: 'bash', params: {} }] } }
+  const first = [
+    ...mapper.mapObject(textObject('a', 'step one text')),
+    ...mapper.mapObject(toolCall),
+  ]
+  // The step's text must be closed before the tool call is handed to DSH.
+  assert.deepEqual(first.filter((chunk) => chunk.type === 'block-end').map((chunk) => chunk.block.text), ['step one text'])
+
+  const last = [
+    ...mapper.mapObject(textObject('b', 'final answer')),
+    ...mapper.mapObject({ code: '0', data: { task_status: 'completed' } }),
+  ]
+  const ends = last.filter((chunk) => chunk.type === 'block-end')
+  assert.deepEqual(ends.map((chunk) => chunk.block.text), ['final answer'], 'only the current step is closed at completion')
+  assert.equal(ends.some((chunk) => chunk.block.text === 'step one text'), false)
+})
+
 test('mapper: thinking blocks become reasoning deltas and a closed reasoning block', () => {
   const mapper = createStreamMapper()
   const chunks = [
