@@ -132,6 +132,21 @@ test('mapper: a real answer that merely mentions "Generating" is kept verbatim',
   assert.deepEqual(ends.map((chunk) => chunk.block.text), [mixed, quoted, longTool, mixedLong])
 })
 
+test('mapper: a tool call also closes the current reasoning block', () => {
+  const mapper = createStreamMapper()
+  const toolCall = { code: '0', data: { block: [{ id: 't1', type: 'tool_use', name: 'bash', params: {} }] } }
+  const first = [
+    ...mapper.mapObject(thinkingObject('th', 'reasoning before the tool')),
+    ...mapper.mapObject(toolCall),
+  ]
+  assert.deepEqual(first.filter((chunk) => chunk.type === 'block-end').map((chunk) => chunk.block.type), ['reasoning'])
+  const last = [
+    ...mapper.mapObject(textObject('answer', 'final')),
+    ...mapper.mapObject({ code: '0', data: { task_status: 'completed' } }),
+  ]
+  assert.equal(last.some((chunk) => chunk.type === 'block-end' && chunk.block.type === 'reasoning'), false)
+})
+
 test('mapper: a tool call closes the current text block instead of replaying it at completion', () => {
   const mapper = createStreamMapper()
   const toolCall = { code: '0', data: { block: [{ id: 't1', type: 'tool_use', name: 'bash', params: {} }] } }
