@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.2 — 2026-10-22
+
+### Fixed
+
+- A resumed loop step now carries a deadline. The parked pump belongs to the
+  controller of the step that parked it, whose request deadline is cleared on
+  suspend; the resuming step's new controller is linked to the parked pump, so
+  a vendor stream that never sends another chunk aborts instead of hanging the
+  session forever.
+
 ## 1.1.1 — 2026-10-22
 
 ### Fixed

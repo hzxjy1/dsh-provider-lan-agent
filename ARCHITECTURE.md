@@ -76,6 +76,10 @@ immediately.
 
 ## Trace
 
+A parked step clears the request deadline; the step that resumes it links its own
+abort signal to the parked pump (`linkParkedAbort`), so a silent vendor stream is
+still bounded by the resuming step's request timeout.
+
 Each interpreted request carries a `requestId`. A parked loop call emits two
 rows with that id — `event: "request"` when it parks and `event: "settled"` when
 the answer is known — so "parked and never resumed" is visible without guessing

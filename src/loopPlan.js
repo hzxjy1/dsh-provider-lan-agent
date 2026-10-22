@@ -101,6 +101,31 @@ export function looksLikePtcPrompt(system) {
 }
 
 /**
+ * Tie a resumed step's abort signal to the parked pump.
+ *
+ * The pump was created with the controller of the step that parked it; that
+ * controller's request deadline was cleared when the turn was suspended. The
+ * step that resumes the turn has a NEW controller and its own deadline, so
+ * without this link a vendor stream that never sends another chunk has no
+ * deadline at all and the session hangs forever. Aborting the new controller
+ * cancels the parked pump, which makes the pending read reject.
+ *
+ * @param {AbortSignal|undefined} signal the resuming step's signal.
+ * @param {() => void} cancel aborts the parked pump.
+ * @returns {() => void} remove the listener.
+ */
+export function linkParkedAbort(signal, cancel) {
+  if (signal === undefined || signal === null || typeof cancel !== 'function') return () => {}
+  const onAbort = () => cancel()
+  if (signal.aborted === true) {
+    onAbort()
+    return () => {}
+  }
+  signal.addEventListener('abort', onAbort, { once: true })
+  return () => signal.removeEventListener('abort', onAbort)
+}
+
+/**
  * Wrap a seam plan in the transport the presentation accepts.
  *
  * `plan.calls` stays the native plan: rendering, audit, and retry all speak that

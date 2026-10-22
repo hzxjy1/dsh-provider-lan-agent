@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 
 import {
   isToolRefusal,
+  linkParkedAbort,
   looksLikeErrorText,
   looksLikePtcPrompt,
   outcomesForPlan,
@@ -58,6 +59,29 @@ test('looksLikePtcPrompt reads the presentation out of the system prompt', () =>
   assert.equal(looksLikePtcPrompt('You may call every tool, including run_code.'), false)
   assert.equal(looksLikePtcPrompt(''), false)
   assert.equal(looksLikePtcPrompt(undefined), false)
+})
+
+/* ── resumed-step deadline ──────────────────────────────────────────────── */
+
+test('linkParkedAbort cancels the parked pump when the resuming step aborts', () => {
+  const controller = new AbortController()
+  let cancelled = 0
+  const unlink = linkParkedAbort(controller.signal, () => { cancelled += 1 })
+  assert.equal(cancelled, 0)
+  controller.abort()
+  assert.equal(cancelled, 1)
+  unlink()
+  controller.abort()
+  assert.equal(cancelled, 1, 'abort fires once and cleanup is harmless')
+})
+
+test('linkParkedAbort handles an already-aborted signal and a missing one', () => {
+  const controller = new AbortController()
+  controller.abort()
+  let cancelled = 0
+  linkParkedAbort(controller.signal, () => { cancelled += 1 })()
+  assert.equal(cancelled, 1)
+  assert.doesNotThrow(() => linkParkedAbort(undefined, () => {})())
 })
 
 /* ── transport wrapping ──────────────────────────────────────────────────── */

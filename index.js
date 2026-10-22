@@ -40,7 +40,7 @@ import { createAuditWriter } from './src/audit.js'
 import { readAuditTail } from './src/auditFeed.js'
 import { DispatchMode, createToolDispatcher } from './src/dispatch.js'
 import { requestApproval, requiresApproval } from './src/approval.js'
-import { LOOP_EXCLUDED, isToolRefusal, looksLikePtcPrompt, outcomesForPlan, withStyle } from './src/loopPlan.js'
+import { LOOP_EXCLUDED, isToolRefusal, linkParkedAbort, looksLikePtcPrompt, outcomesForPlan, withStyle } from './src/loopPlan.js'
 import { mapCommandText, mapPath, mapVendorPaths, resolveMappings, VENDOR_MEMORY_ROOT } from './src/paths.js'
 import { answerMemoryOp } from './src/memory.js'
 import { createLoopRoute, drainWithSuspension, extractToolResults, isLoopContinuation, toolCallChunks } from './src/loopRoute.js'
@@ -564,7 +564,7 @@ class LanAgentAdapter {
   }
 
   /** One resumed step: answer the parked vendor calls, then keep the stream. */
-  async *#resumeParked({ parked, options, routeKey }) {
+  async *#resumeParked({ parked, options, routeKey, controller }) {
     const wanted = parked.calls.flatMap((call) => [...call.ids.values()])
     const results = extractToolResults(options.messages, wanted)
     const cwd = this.resolveCwd?.(routeKey.split('#')[0])
@@ -658,6 +658,11 @@ class LanAgentAdapter {
       for (const chunk of this.#emitToolCalls(state, parked.mapper)) yield chunk
       return
     }
+    // The parked pump belongs to the OLD controller; the resuming step's
+    // deadline lives on the NEW one. Link them, or a silent vendor stream has
+    // no deadline and the session hangs forever (measured: a 60s tool timeout
+    // was answered, then the next step never produced another event).
+    const unlinkAbort = linkParkedAbort(controller?.signal, () => parked.cancel?.())
     try {
       if (parked.mode === 'draining') await parked.drainPromise
       if (parked.mode === 'drained') {
@@ -682,6 +687,7 @@ class LanAgentAdapter {
         for (const chunk of this.#emitToolCalls(state, parked.mapper)) yield chunk
       }
     } finally {
+      unlinkAbort()
       if (!handedOn) await parked.release?.()
     }
   }
