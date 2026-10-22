@@ -80,7 +80,7 @@ const IGNORED_BLOCK_TYPES = new Set([
  * that merely starts like this and grows into real content (cumulative
  * snapshots) must never lose that content.
  */
-const TOOL_NARRATION = /^Generating \d+ chars? for tool [^\n]*$/
+const TOOL_NARRATION = /^Generating (?:\d+ chars? for tool [^\n]*|long tool, cost \(\d+(?:\.\d+)? ?s\))$/
 const isToolNarration = (text) => TOOL_NARRATION.test(text.trim())
 
 /**

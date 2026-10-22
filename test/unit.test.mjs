@@ -98,6 +98,20 @@ test('mapper: a pure tool-narration block is dropped without opening a text bloc
   assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
 })
 
+test('mapper: the long-tool progress variant is dropped as a whole block', () => {
+  for (const line of ['Generating long tool, cost (0s)', 'Generating long tool, cost (10s)']) {
+    const mapper = createStreamMapper()
+    const chunks = [
+      ...mapper.mapObject(textObject('n', line)),
+      ...mapper.mapObject(textObject('n', line)),
+      ...mapper.mapObject({ code: '0', data: { task_status: 'completed' } }),
+    ]
+    assert.equal(chunks.filter((chunk) => chunk.type === 'text-delta').length, 0, line)
+    assert.equal(chunks.filter((chunk) => chunk.type === 'block-end').length, 0, line)
+    assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+  }
+})
+
 test('mapper: a real answer that merely mentions "Generating" is kept verbatim', () => {
   const mapper = createStreamMapper()
   // A multi-line block whose FIRST line happens to be the narration prefix
@@ -105,14 +119,16 @@ test('mapper: a real answer that merely mentions "Generating" is kept verbatim',
   const mixed = 'Generating 386 chars for tool **Bash**\n已完成，以下是结果。'
   const quoted = '界面反复出现 Generating 386 chars for tool **Bash** 字样，很烦。'
   const longTool = 'Generating long tool, cost (10s)，这句是回答的一部分。'
+  const mixedLong = 'Generating long tool, cost (0s)\n结果在下一行。'
   const chunks = [
     ...mapper.mapObject(textObject('a', mixed)),
     ...mapper.mapObject(textObject('b', quoted)),
     ...mapper.mapObject(textObject('c', longTool)),
+    ...mapper.mapObject(textObject('d', mixedLong)),
     ...mapper.mapObject({ code: '0', data: { task_status: 'completed' } }),
   ]
   const ends = chunks.filter((chunk) => chunk.type === 'block-end')
-  assert.deepEqual(ends.map((chunk) => chunk.block.text), [mixed, quoted, longTool])
+  assert.deepEqual(ends.map((chunk) => chunk.block.text), [mixed, quoted, longTool, mixedLong])
 })
 
 test('mapper: tool_use yields no DSH chunk and is reported once per id', () => {

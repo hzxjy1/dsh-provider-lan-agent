@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 — 2026-10-22
+
+### Fixed
+
+- Drop the second tool-progress narration variant, `Generating long tool, cost (Ns)`,
+  as a whole text block. It is the same kind of server-side filler as
+  `Generating N chars for tool X`; mixed or quoted blocks are still kept.
+
 ## 1.1.0 — 2026-10-21
 
 ### Migration
