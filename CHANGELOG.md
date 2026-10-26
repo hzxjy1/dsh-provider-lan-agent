@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.2.3 — 2026-10-26
+
+### Fixed
+
+- Pass the local-usage callback from `stream()` into `#createPump`; the first
+  1.2.2 cut referenced `purpose` inside the pump, where it is not in scope, so
+  every turn failed with `lanagent: purpose is not defined`. An adapter-level
+  completion test now runs the real `stream()` path against a fake transport.
+
+## 1.2.2 — 2026-10-26
+
+### Fixed
+
+- Stop mapping the vendor agent's `token_usage.used_tokens` to DSH
+  `usage.inputTokens`. That counter describes the vendor's own per-`chatId`
+  conversation, not the prompt of this request. DSH's token meter treated it as
+  local request pressure, so automatic compaction fired while the local surface
+  was far below the threshold and repeated every turn (local compaction cannot
+  shrink the vendor counter). The raw sample remains available through
+  `onTokenUsage` for diagnostics. Completion now reports the host token meter's
+  local request pressure as the usage sample when that service is reachable;
+  otherwise it reports no usage and compaction falls back to its own estimate.
+
 ## 1.2.1 — 2026-10-22
 
 ### Fixed

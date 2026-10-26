@@ -220,7 +220,7 @@ const THINK_OFF = new Set(['', 'off', 'none', 'no', 'disabled', 'minimal'])
  * installed third-party providers do.
  */
 class LanAgentAdapter {
-  constructor({ route, baseURL, user, auth, catalog, logger, systemPromptMode, thinkMode, purposePolicy, toolChannel, toolTimeoutMs, requestTimeoutMs, collectSkills, collectToolbox, createToolHandler, loopRoute, loopMode, loopCallStyle, loopBudgetMs, toolboxName, audit, resolveCwd, resolveTool, availableTools }) {
+  constructor({ route, baseURL, user, auth, catalog, logger, systemPromptMode, thinkMode, purposePolicy, toolChannel, toolTimeoutMs, requestTimeoutMs, collectSkills, collectToolbox, createToolHandler, loopRoute, loopMode, loopCallStyle, loopBudgetMs, toolboxName, audit, resolveCwd, resolveTool, availableTools, measurePressure }) {
     this.route = route
     this.baseURL = baseURL.replace(/\/+$/, '')
     this.user = user
@@ -247,6 +247,7 @@ class LanAgentAdapter {
     this.availableTools = availableTools
     this.audit = audit
     this.resolveCwd = resolveCwd
+    this.measurePressure = measurePressure
     /** Live turn controllers, aborted on dispose. */
     this.active = new Set()
   }
@@ -442,7 +443,17 @@ class LanAgentAdapter {
           this.logger?.debug?.(`lanagent: POST task-agent route=${this.route} model=${options.model} chat=${chatId} session=${sessionId} purpose=${purpose ?? 'chat'}`)
 
           const holder = {}
-          const pump = this.#createPump({ body, controller, onToolUse: () => { toolCalls += 1 } }, holder)
+          const pump = this.#createPump({
+            body,
+            controller,
+            onToolUse: () => { toolCalls += 1 },
+            // The vendor turn's local request pressure. Auxiliary calls (title,
+            // compaction) have no assistant settlement of their own, so they leave
+            // the sample alone.
+            localUsage: purpose === undefined && this.measurePressure !== undefined
+              ? () => this.measurePressure(sessionKey, options.tools)
+              : undefined,
+          }, holder)
           const suspension = this.loopRoute?.arm(routeKey)
           let pendingRead
           let parkedHere = false
@@ -720,7 +731,7 @@ class LanAgentAdapter {
   }
 
   /** Turn one HTTP attempt into a resumable generator of DSH chunks. */
-  #createPump({ body, controller, onToolUse }, holder) {
+  #createPump({ body, controller, onToolUse, localUsage }, holder) {
     const logger = this.logger
     const run = async function* run() {
       const response = await fetch(`${this.baseURL}/chatbot/v3/task-agent`, {
@@ -739,6 +750,7 @@ class LanAgentAdapter {
       const mapper = createStreamMapper({
         logger,
         onToolUse: (block) => onToolUse?.(block),
+        localUsage,
       })
       holder.mapper = mapper
       const reader = response.body.getReader()
@@ -1021,6 +1033,41 @@ export function apply(ctx, config) {
     return {
       agent: agents?.get?.(sessionId) ?? agents?.currentInitiator?.(),
       cwd: lookup('sessions').service?.get?.(sessionId)?.header?.cwd,
+    }
+  }
+
+  /**
+   * Request pressure for the local usage sample.
+   *
+   * The vendor cannot report this: `token_usage.used_tokens` is its own
+   * per-`chatId` conversation counter, not this request's prompt. The host
+   * token meter prices the current DSH surface at the moment the vendor turn
+   * completes, which is exactly what DSH's compaction and context meter
+   * expect. Use `surfaceTokens` (plus the tool-schema price) rather than
+   * `totalTokens`: the latter may still be anchored to a legacy vendor usage
+   * sample from the same session, which is the very value this fix removes.
+   *
+   * Missing services or a racing session yield no sample; the meter then keeps
+   * its previous reading and compaction falls back to its own estimate.
+   *
+   * @param {string} sessionId DSH session id.
+   * @param {readonly object[] | undefined} tools request tool schemas.
+   * @returns {number | undefined}
+   */
+  const measurePressure = (sessionId, tools) => {
+    const meter = ctx.get('tokenMeter')
+    const session = lookup('sessions').service?.get?.(sessionId)
+    if (meter === undefined || typeof meter.measure !== 'function' || session === undefined) return undefined
+    try {
+      const surfaceTokens = meter.measure(session).surfaceTokens
+      const toolsTokens = Array.isArray(tools) && tools.length > 0
+        ? Math.ceil(JSON.stringify(tools).length / 4) + 4
+        : 0
+      const total = surfaceTokens + toolsTokens
+      return Number.isFinite(total) && total > 0 ? total : undefined
+    } catch (error) {
+      logger?.debug?.(`lanagent: local token measurement unavailable: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
     }
   }
 
@@ -1350,6 +1397,7 @@ export function apply(ctx, config) {
     availableTools: toolboxTools,
     audit,
     resolveCwd: (sessionId) => resolveTurnContext(sessionId).cwd,
+    measurePressure,
   })
 
   ctx.llm.registerAdapter([route], adapter)
@@ -1417,3 +1465,6 @@ export function apply(ctx, config) {
     `lanagent: route "${route}" mounted (auth=${authMode}, account from ${String(configValue(authConfig, 'userRef', 'LAN_AGENT_USER'))}${user === '' ? '' : ' (plain-config fallback present)'}, baseURL=${baseURL})`,
   )
 }
+
+// Exported for the offline adapter tests; the plugin itself only needs `apply`.
+export { LanAgentAdapter }

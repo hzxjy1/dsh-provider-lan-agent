@@ -94,10 +94,15 @@ const isToolNarration = (text) => TOOL_NARRATION.test(text.trim())
  * @param {object} [options]
  * @param {(block: object) => void} [options.onToolUse] called for each distinct
  *   `tool_use` block, in arrival order.
- * @param {(data: object) => void} [options.onTokenUsage] raw `token_usage` data.
+ * @param {(data: object) => void} [options.onTokenUsage] raw `token_usage` data,
+ *   observed for diagnostics only; it is never converted into a DSH usage chunk.
+ * @param {() => (number | undefined)} [options.localUsage] local request pressure
+ *   from the host token meter. Called once when the vendor turn completes; its
+ *   value becomes the DSH usage sample (the vendor `used_tokens` does not
+ *   describe this request). Omitted for auxiliary calls.
  * @param {{warn?: Function, debug?: Function}} [options.logger]
  */
-export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
+export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger } = {}) {
   /** @type {Map<string, {index: number, text: string, closed: boolean}>} */
   const texts = new Map()
   /** @type {Map<string, {index: number, text: string, closed: boolean}>} */
@@ -109,7 +114,6 @@ export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
   let finishReason = null
   let terminal = false
   let sawToolCalls = false
-  let usage = null
 
   const ensureText = (key, chunks) => {
     let state = texts.get(key)
@@ -149,16 +153,18 @@ export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
     }
   }
 
-  const takeUsage = (chunks) => {
-    if (usage === null) return
-    // The vendor reports only a context total (`used_tokens`), which covers
-    // input + history; per-direction accounting is not on the wire, so output
-    // stays 0 and the total is what the number actually measures.
-    chunks.push({
-      type: 'usage',
-      usage: { inputTokens: usage.usedTokens, outputTokens: 0, totalTokens: usage.usedTokens },
-    })
-    usage = null
+  const takeLocalUsage = (chunks) => {
+    let pressure
+    try {
+      pressure = localUsage?.()
+    } catch {
+      // A measurement failure must never break the turn: the host then falls
+      // back to its own surface estimate.
+      return
+    }
+    if (typeof pressure !== 'number' || !Number.isFinite(pressure) || pressure <= 0) return
+    const tokens = Math.round(pressure)
+    chunks.push({ type: 'usage', usage: { inputTokens: tokens, outputTokens: 0, totalTokens: tokens } })
   }
 
   return {
@@ -228,7 +234,14 @@ export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
           if (block.event === 'token_usage' && block.data !== null && typeof block.data === 'object') {
             const used = Number(block.data.used_tokens)
             if (Number.isFinite(used)) {
-              usage = { usedTokens: used }
+              // Deliberately do NOT translate `used_tokens` into a DSH `usage`
+              // chunk. It is the vendor agent's own conversation counter (same
+              // `chatId` across the DSH session), not the prompt size of this
+              // request. Reporting it as `inputTokens` makes DSH's token meter
+              // treat the remote context as local pressure; local compaction
+              // cannot shrink that counter, so pressure stays above the
+              // threshold and compaction repeats every turn. The raw sample is
+              // still exposed for diagnostics.
               onTokenUsage?.(block.data)
             }
           }
@@ -252,13 +265,12 @@ export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
         if (data.task_status === 'completed') {
           closeReasonings(chunks)
           closeTexts(chunks)
-          takeUsage(chunks)
+          takeLocalUsage(chunks)
           chunks.push({ type: 'finish', reason: { kind: finishReason === 'max-tokens' ? 'max-tokens' : 'stop' } })
           terminal = true
         } else if (data.task_status !== 'init' && data.task_status !== 'running') {
           closeReasonings(chunks)
           closeTexts(chunks)
-          takeUsage(chunks)
           chunks.push({
             type: 'finish',
             reason: {
@@ -297,7 +309,6 @@ export function createStreamMapper({ onToolUse, onTokenUsage, logger } = {}) {
       const chunks = []
       closeReasonings(chunks)
       closeTexts(chunks)
-      takeUsage(chunks)
       if (reason !== undefined) {
         chunks.push({ type: 'finish', reason })
       } else if (sawToolCalls) {

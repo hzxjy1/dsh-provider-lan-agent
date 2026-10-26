@@ -30,7 +30,7 @@ WS    /ws-api/coagent/<session_id>  → 服务端的工具调用，在本进程�
 | 认证：账号密码登录 → JWT（内存缓存、`-103/-106` 自动重登、失败指数退避 + 每小时上限） | ✅ M1 |
 | 模型目录：拉 `model_groups` + 缓存 + 静态回退；`listModels` / `resolveModel` / 模型发现 | ✅ M1 |
 | 请求投影：DSH 历史 → 两角色对话；系统提示词走 `rules`；skill 元数据走 `skills` | ✅ M1 |
-| 流解析：拼接 JSON 解析 + 累积快照差分 → DSH `StreamChunk`；`task_status` 收尾；usage 映射 | ✅ M1 |
+| 流解析：拼接 JSON 解析 + 累积快照差分 → DSH `StreamChunk`；`task_status` 收尾；厂商 usage 仅旁路观测、完成时上报本地 tokenMeter 压力 | ✅ M1 |
 | 工具通道：每轮开 WS、心跳、按 `block_id` 关联、软超时 | ✅ M1 |
 | **工具桥：厂商 8 个内置工具 → DSH 工具，经 `ctx.tools.execute()`（审批/沙箱归 DSH）** | ✅ M2 |
 | 厂商请求 seam：`interpret` → plan / local / refusal，`render` 统一整形（bridge + loop 均已接入） | ✅ M4 |
@@ -39,7 +39,7 @@ WS    /ws-api/coagent/<session_id>  → 服务端的工具调用，在本进程�
 | MCP 工具**清单注入**（让厂商模型知道自己有哪些 MCP 工具可调） | ✅ M3 |
 | 旁路轻量通道（session-title / compaction） | ✅ M1 |
 
-**验收证据**：`node --test` **222 项全绿**（协议/认证/目录/工具翻译/派发/审计 + 19 个真实 fixture 的契约测试）；
+**验收证据**：`node --test` **226 项全绿**（协议/认证/目录/工具翻译/派发/审计 + 19 个真实 fixture 的契约测试）；
 真实服务验证脚本保留在本地，不随仓库发布；
 GUI 模型选择器出现 `LAN Agent` 与 6 个模型；**真实 GUI 会话端到端跑通**
 （厂商 agent 调 `execute_command` → 桥 → DSH 真跑 `pwd && ls api-reference.md && date +%s` → 输出正确，
@@ -141,13 +141,13 @@ EOF
 包以本地路径安装（profile 的 `node_modules/@local` 符号链接），不从公共 registry 发布：
 
 ```sh
-pnpm test          # 222 项离线测试
+pnpm test          # 226 项离线测试
 ```
 
 ## 测试
 
 ```sh
-node --test                        # 222 项离线测试：解析/差分/投影/rules/认证/目录 + 工具翻译 + 契约 fixture（无需锚点）
+node --test                        # 226 项离线测试：解析/差分/投影/rules/认证/目录 + 工具翻译 + 契约 fixture（无需锚点）
 node --test test/contract/*.test.mjs  # 只跑契约测试：19 个 case，value 与 text-only 两种 outcome
 ```
 
@@ -169,6 +169,11 @@ node --test test/contract/*.test.mjs  # 只跑契约测试：19 个 case，value
 - 每轮固定约 **15.8K token** 的厂商系统提示词成本，与本轮内容多少无关。
 - 纯文本：请求体没有图片字段，v1 按 `inputModalities: ['text']` 宣告。
 - 上下文 204800、输出上限 16384（厂商 25 条模型定义的实测值）。
+- 厂商的 `token_usage.used_tokens` 是厂商 agent 自己的会话计数（同一个 `chatId` 持续累积），
+  不是 DSH 本次请求的 prompt；插件只把它交给 `onTokenUsage` 观测，**不再冒充 DSH `usage`**。
+  一轮完成时改用 host `tokenMeter.measure()` 的本地请求压力作为 usage 样本，所以上下文占用环仍然可用；
+  若 host tokenMeter 不可达，则不报 usage（环隐藏），自动压缩仍按本地 surface 估算，
+  不会再被远端计数带着空转。
 - 目标私有且会变：`action` 字面量、`config.agent_behavior_mode`、8 个工具名都是逆向所得。
 
 ## 打包注意（踩过的坑）

@@ -22,6 +22,7 @@ import { buildRules, buildTaskAgentBody, projectConversation, renderContent } fr
 import { LanAgentAuth, configValue } from '../src/auth.js'
 import { LanAgentCatalog, FALLBACK_GROUP_IDS } from '../src/catalog.js'
 import { createRefusingHandler } from '../src/ws.js'
+import { LanAgentAdapter } from '../index.js'
 
 /* ── framing ─────────────────────────────────────────────────────────────── */
 
@@ -205,8 +206,37 @@ test('mapper: tool_use yields no DSH chunk and is reported once per id', () => {
   assert.deepEqual(seen, ['get_environment_info'])
 })
 
-test('mapper: token_usage becomes a usage chunk', () => {
-  const mapper = createStreamMapper()
+test('mapper: the vendor token_usage never becomes a DSH usage chunk', () => {
+  const seen = []
+  const mapper = createStreamMapper({ onTokenUsage: (data) => seen.push(data) })
+  const chunks = [
+    ...mapper.mapObject({
+      code: '0',
+      data: { block: [{ id: 'u', type: 'system_info', event: 'token_usage', data: { used_tokens: 16271, max_token: 204800 } }] },
+    }),
+    ...mapper.mapObject({ code: '0', data: { task_status: 'completed' } }),
+  ]
+  // `used_tokens` is the vendor agent's own conversation counter, not this
+  // request's prompt size. Emitting it as DSH usage makes the token meter treat
+  // that remote count as local pressure and compaction loops forever.
+  assert.equal(chunks.some((chunk) => chunk.type === 'usage'), false)
+  assert.deepEqual(seen, [{ used_tokens: 16271, max_token: 204800 }])
+
+  // A transport-level end must not revive the usage chunk either.
+  const seenOnEnd = []
+  const ended = createStreamMapper({ onTokenUsage: (data) => seenOnEnd.push(data) })
+  assert.deepEqual(ended.mapObject({
+    code: '0',
+    data: { block: [{ id: 'u', type: 'system_info', event: 'token_usage', data: { used_tokens: 16271, max_token: 204800 } }] },
+  }), [])
+  const tail = ended.end()
+  assert.equal(tail.some((chunk) => chunk.type === 'usage'), false)
+  assert.equal(tail.at(-1).type, 'finish')
+  assert.deepEqual(seenOnEnd, [{ used_tokens: 16271, max_token: 204800 }])
+})
+
+test('mapper: the host local pressure becomes the completion usage sample', () => {
+  const mapper = createStreamMapper({ localUsage: () => 4242.4 })
   const chunks = [
     ...mapper.mapObject({
       code: '0',
@@ -215,10 +245,86 @@ test('mapper: token_usage becomes a usage chunk', () => {
     ...mapper.mapObject({ code: '0', data: { task_status: 'completed' } }),
   ]
   assert.deepEqual(chunks.find((chunk) => chunk.type === 'usage').usage, {
-    inputTokens: 16271,
+    inputTokens: 4242,
     outputTokens: 0,
-    totalTokens: 16271,
+    totalTokens: 4242,
   })
+  assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+})
+
+test('mapper: a missing local pressure sample emits no usage chunk', () => {
+  const mapper = createStreamMapper({ localUsage: () => undefined })
+  const chunks = [...mapper.mapObject({ code: '0', data: { task_status: 'completed' } })]
+  assert.equal(chunks.some((chunk) => chunk.type === 'usage'), false)
+})
+
+test('adapter: completion samples local pressure with no purpose in scope', async () => {
+  const payload = [
+    JSON.stringify({
+      code: '0',
+      data: { block: [{ id: 'u', type: 'system_info', event: 'token_usage', data: { used_tokens: 500000, max_token: 204800 } }] },
+    }),
+    JSON.stringify({
+      code: '0',
+      data: { block: [{ id: 'a', type: 'text', content: 'ok' }], task_status: 'completed' },
+    }),
+  ].join('')
+  const response = {
+    ok: true,
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload))
+        controller.close()
+      },
+    }),
+  }
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => response
+  try {
+    const adapter = new LanAgentAdapter({
+      route: 'lanagent',
+      baseURL: 'http://lanagent.test',
+      user: 'user',
+      auth: { token: async () => 'jwt' },
+      catalog: { list: async () => [], resolve: async () => ({ contextWindow: 204800, maxTokens: 16384 }) },
+      logger: {},
+      systemPromptMode: 'none',
+      thinkMode: 'off',
+      purposePolicy: 'light',
+      toolChannel: 'disabled',
+      toolTimeoutMs: 1000,
+      requestTimeoutMs: 5000,
+      collectSkills: async () => [],
+      collectToolbox: async () => ({}),
+      createToolHandler: () => () => undefined,
+      loopRoute: undefined,
+      loopMode: 'loop',
+      loopCallStyle: 'auto',
+      loopBudgetMs: 1000,
+      toolboxName: 'dsh_toolbox',
+      audit: undefined,
+      resolveCwd: () => '/tmp',
+      resolveTool: () => undefined,
+      availableTools: [],
+      measurePressure: () => 12345,
+    })
+    const chunks = []
+    for await (const chunk of adapter.stream({
+      provider: 'lanagent',
+      model: 'glm-5.3',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      sessionId: 'session-test',
+      tools: [],
+    })) chunks.push(chunk)
+    assert.deepEqual(chunks.find((chunk) => chunk.type === 'usage').usage, {
+      inputTokens: 12345,
+      outputTokens: 0,
+      totalTokens: 12345,
+    })
+    assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('mapper: vendor application codes map onto DSH failure codes', () => {
