@@ -1,5 +1,71 @@
 # Changelog
 
+## 1.3.1 — 2026-10-27
+
+### Changed
+
+- The shipped row raises `mcpToolboxMaxTools` 48 → 100. Auto mode measured
+  48 schemas on 2026-10-27 (7 plain + 12 browser + 12 serial + 8 remote-host + 9
+  desktop) — exactly the old cap, i.e. zero headroom: one more tool anywhere
+  would have silently dropped the declaration TAIL.
+
+### Fixed
+
+- The `skills` channel was sent **empty**: `collectSkills` called
+  `ctx.skills.list()` with no lookup, so the registry answered from the host
+  layer alone and found nothing while the session had 13 skills. The vendor's own
+  `Skill` tool resolves a skill NAME to the `filePath` in that channel and
+  answers `skill path is None` when the entry carries none — measured: the same
+  call failed for every argument shape, and no `tool_use` ever reached the
+  bridge. The lookup now passes the session's agent scope and workspace. Verified
+  end to end: the vendor resolved the name to the very path we sent, forwarded a
+  `read_files` call to the bridge, and the model quoted the skill body.
+- Mapping for the vendor's own `load_skill` spelling (`src/vendor/registry.js`).
+  The measured flow never uses it — the server solves `load_skill` by asking the
+  client to read the file — so the entry is defensive.
+- The rules channel now prefers the toolbox `skill` (it also returns
+  `resourceBase`, which relative paths inside a skill need) and says the native
+  `Skill` works too, instead of declaring it permanently broken.
+
+## 1.3.0 — 2026-10-27
+
+### Added
+
+- `mcpToolboxMcpAuto` (default on): the MCP half of the toolbox is discovered
+  from the DSH tool registry on every turn instead of being hand-listed. Every
+  loaded MCP server publishes its own tools, so adding a server to the profile is
+  all it takes for the vendor to see it. Measured failure this removes: the
+  desktop-automation server was loaded and callable in the Web GUI but absent
+  from `mcpToolWhitelist`, so the vendor's client rejected
+  `use_mcp_tool(server_name:"open-computer-use", …)` locally with "MCP server is
+  not enabled" before the request ever reached the bridge. Discovery reads
+  `tools.schemas()` plus `tools.view().knownNames` (the complete name list,
+  including tools registered in nested scopes) and resolves each name through
+  `tools.get`, the same path the §27 completion fix uses.
+- `mcpToolboxMcpDeny`: prefix deny list applied to declared names and to the
+  names the rules advertise, so trimming a server cannot leave the model told
+  about a tool it is unable to call.
+- The toolbox audit record now covers EVERY declared server, not only the
+  synthetic one, and its change signature includes them: an MCP server missing
+  from the declaration is exactly the failure the record has to show.
+
+### Changed
+
+- The shipped row raises `mcpToolboxMaxTools` 36 → 48. Auto mode publishes ~41
+  schemas (7 plain + 11 browser + 6 serial + 8 remote-host + 9 desktop), and the
+  cap drops the whitelist TAIL — at 36 it would have silently swallowed the
+  desktop tools it is meant to deliver.
+- The explicit `mcp__…` whitelist entries still work and dedupe against
+  discovery, so they can serve as a baseline until auto mode has proven itself.
+
+### Fixed
+
+- Hoist `mcpToolboxMcpAuto` / `mcpToolboxMcpDeny` above the first toolbox-name
+  filter. The 1.3.0 draft read `mcpToolboxMcpDeny` through
+  `isDeniedToolboxName()` before that `const` was initialized, so the plugin
+  failed to activate with `ReferenceError: Cannot access 'mcpToolboxMcpDeny'
+  before initialization`. An `apply(ctx, {})` mount test now covers activation.
+
 ## 1.2.3 — 2026-10-26
 
 ### Fixed

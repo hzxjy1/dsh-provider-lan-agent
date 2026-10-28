@@ -63,8 +63,17 @@
         # plus the plain file/command tools under their DSH names.
         mcpToolbox: enabled
         mcpToolboxName: dsh_toolbox
-        # Measured: the broad `mcp__*` list published 64 schemas = ~11.8K tokens
-        # per request. This narrow list publishes ~14 = ~2.1K tokens.
+        # MCP tools are discovered from the registry on every turn
+        # (mcpToolboxMcpAuto), so this list only has to name the PLAIN tools —
+        # everything a loaded MCP server exposes reaches the vendor by itself.
+        # The explicit mcp__ entries below are kept as a stable baseline (they
+        # dedupe against discovery, and still publish if discovery finds
+        # nothing); delete them once auto mode has proven itself.
+        #
+        # Everything published costs tokens on EVERY request, so the deny list
+        # is the escape hatch for a server whose schemas are not worth it.
+        mcpToolboxMcpAuto: true
+        mcpToolboxMcpDeny: []
         mcpToolWhitelist:
           # The vendor's agent can ask the DSH user a question: the tool is a
           # passthrough name, so the loop route turns it into the real question
@@ -100,7 +109,12 @@
           - subagent
           - subagent_fork
           - todo_write
-        mcpToolboxMaxTools: 36
+        # Auto mode publishes every tool of every loaded MCP server. Measured on
+        # 2026-10-27: 48 (7 plain + 12 browser + 12 serial + 8 remote-host + 9
+        # desktop) — exactly at the old cap. The cap drops the TAIL of the list,
+        # so a full list renders as "one whole server vanished"; leave real
+        # headroom, not just enough for today's inventory.
+        mcpToolboxMaxTools: 100
         # Every vendor tool request lands here, one JSON line each. This is the
         # only trace of a request our translation refuses (DSH never sees it).
         # How the vendor's tool calls run (design notes §21):

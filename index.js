@@ -47,7 +47,7 @@ import { createLoopRoute, drainWithSuspension, extractToolResults, isLoopContinu
 
 /** Backoff between retries of a fresh POST rejected with "-200 上一个任务仍在执行中". */
 const VENDOR_BUSY_RETRY_MS = 3000
-import { DEFAULT_TOOLBOX_NAME, DEFAULT_WHITELIST, buildToolboxServers, completeToolboxSchemas } from './src/toolbox.js'
+import { DEFAULT_TOOLBOX_NAME, DEFAULT_WHITELIST, buildToolboxServers, collectMcpToolSchemas, completeToolboxSchemas } from './src/toolbox.js'
 import { createToolBridge } from './src/vendor/bridge.js'
 import { createDocumentReader } from './src/vendor/documents.js'
 import { interpret, render } from './src/vendor/registry.js'
@@ -170,8 +170,12 @@ function buildConfig(z) {
       .description('Publish whitelisted DSH tools to the vendor as one synthetic MCP server.'),
     mcpToolboxName: z.string().default(DEFAULT_TOOLBOX_NAME),
     mcpToolWhitelist: z.array(z.string()).default([...DEFAULT_WHITELIST])
-      .description('Names (or prefix*) published to the vendor; it pays tokens for every schema.'),
+      .description('Names (or prefix*) published to the vendor; it pays tokens for every schema. With mcpToolboxMcpAuto on, MCP tools need no entry here — the loaded servers supply them.'),
     mcpToolboxMaxTools: z.natural().default(24),
+    mcpToolboxMcpAuto: z.boolean().default(true)
+      .description('Publish every tool of every MCP server DSH has loaded, discovered from the tool registry each turn. false: publish only the manual whitelist.'),
+    mcpToolboxMcpDeny: z.array(z.string()).default([])
+      .description('Prefixes never published, listed or discovered (for example mcp__playwright-edge__); the toolbox trim when a server\'s schemas are not worth their per-request tokens.'),
     toolExecution: z.union([z.const('loop'), z.const('out-of-band')]).default('loop')
       .description('loop: the agent loop runs the tools (native card, approvals, transcript). out-of-band: the bridge runs them and answers immediately.'),
     loopCallStyle: z.union([z.const('auto'), z.const('native'), z.const('run_code')]).default('auto')
@@ -417,7 +421,7 @@ class LanAgentAdapter {
       resolveTool: this.resolveTool,
       availableTools: this.availableTools,
       })
-      const skills = light || this.systemPromptMode === 'none' ? [] : await this.collectSkills()
+      const skills = light || this.systemPromptMode === 'none' ? [] : await this.collectSkills(sessionId)
       // Auxiliary calls stay light: a title or summary has no business seeing
       // the toolbox (design notes §6, purposePolicy).
       const mcpServers = light ? {} : await this.collectToolbox(sessionKey)
@@ -898,11 +902,43 @@ export function apply(ctx, config) {
    * use `browser_navigate` dies with "tools.browser_navigate is not a function"
    * (measured, design notes §27).
    */
-  const toolboxTools = (() => {
+  const toolboxBaseTools = (() => {
     const configured = configValue(config, 'mcpToolWhitelist', undefined)
     const list = Array.isArray(configured) && configured.length > 0 ? configured : DEFAULT_WHITELIST
     return list.map(String)
   })()
+  // Read these BEFORE the first name filter: the deny helper is called while
+  // building `toolboxTools` below, and a `const` read before its initializer
+  // throws a temporal-dead-zone ReferenceError at mount.
+  const mcpToolboxMcpAuto = configValue(config, 'mcpToolboxMcpAuto', true) !== false
+  const mcpToolboxMcpDeny = (() => {
+    const configured = configValue(config, 'mcpToolboxMcpDeny', [])
+    return Array.isArray(configured) ? configured.map(String).filter((prefix) => prefix.length > 0) : []
+  })()
+  /** A name the operator excluded from the toolbox, listed or discovered. */
+  const isDeniedToolboxName = (name) => mcpToolboxMcpDeny.some((prefix) => String(name).startsWith(prefix))
+  /**
+   * The live list of tools the vendor may name.
+   *
+   * Mutated IN PLACE on purpose: `availableTools` and `resolveTool` below hand
+   * this very array to the rules builder and the loop route, so auto-discovered
+   * MCP tools become nameable without threading a new value through them.
+   * Configured entries keep their positions; discovered names are appended, so
+   * a bare-name suffix clash resolves the operator's own entry first.
+   */
+  const toolboxTools = toolboxBaseTools.filter((name) => !isDeniedToolboxName(name))
+  const refreshToolboxTools = (mcpNames) => {
+    if (!mcpToolboxMcpAuto) return
+    const next = toolboxBaseTools.filter((name) => !isDeniedToolboxName(name))
+    const seen = new Set(next)
+    for (const name of Array.isArray(mcpNames) ? mcpNames : []) {
+      const text = String(name ?? '')
+      if (text.length === 0 || seen.has(text)) continue
+      seen.add(text)
+      next.push(text)
+    }
+    toolboxTools.splice(0, toolboxTools.length, ...next)
+  }
   const resolveToolboxTool = (name) => {
     const wanted = String(name ?? '')
     if (wanted.length === 0) return undefined
@@ -996,11 +1032,26 @@ export function apply(ctx, config) {
    * client sends. Any shape surprise degrades to an empty list rather than
    * failing a turn.
    */
-  const collectSkills = async () => {
+  /**
+   * Skill metadata for the vendor's own `skills` channel.
+   *
+   * That channel is what lets the vendor's native `load_skill` resolve a skill
+   * NAME to a path: the desktop client fills `filePath` from each command's
+   * absolute path, and the server refuses the call with "skill path is None"
+   * when the entry it looked up carries no path. Called WITHOUT a scope, the
+   * registry answers from the host layer only and returns nothing — measured
+   * 2026-10-28: the payload was `[]` for a session that had 13 skills, which is
+   * exactly why every native load failed while the toolbox `skill` worked.
+   *
+   * @param {string} [sessionId] session whose agent scope and workspace to query.
+   */
+  const collectSkills = async (sessionId) => {
     const skills = ctx.get('skills')
     if (skills === undefined || typeof skills.list !== 'function') return []
+    const { agent, cwd } = resolveTurnContext(sessionId)
     try {
-      const listed = await skills.list()
+      const listed = await skills.list({ scope: agent, cwd })
+      logger?.debug?.(`lanagent: skill catalogue ${Array.isArray(listed) ? listed.length : 0} entry(ies) for the vendor`)
       return (Array.isArray(listed) ? listed : [])
         .map((skill) => {
           const skillName = skill?.name ?? skill?.id
@@ -1090,25 +1141,54 @@ export function apply(ctx, config) {
       // (every MCP server lives in one), so the whitelist's named entries are
       // resolved individually first — otherwise a skill that says "use the
       // browser tool" points at a tool the vendor never received.
+      const configuredWhitelist = Array.isArray(mcpToolWhitelist) && mcpToolWhitelist.length > 0
+        ? mcpToolWhitelist.map(String)
+        : [...DEFAULT_WHITELIST]
       const schemas = completeToolboxSchemas({
         schemas: tools.schemas(agent),
-        whitelist: Array.isArray(mcpToolWhitelist) && mcpToolWhitelist.length > 0 ? mcpToolWhitelist : [...DEFAULT_WHITELIST],
+        whitelist: configuredWhitelist,
         get: (name) => tools.get?.(name, agent) ?? tools.get?.(name),
       })
+      // Auto mode: every MCP server DSH has loaded publishes its own tools, so
+      // adding a server to the profile (or to a skill) is all it takes for the
+      // vendor to see it. The hand-kept list was a stale copy of this registry
+      // anyway — that is exactly how the desktop MCP server stayed missing from
+      // the vendor's toolbox while the Web GUI could call it (design notes §27).
+      const discovered = mcpToolboxMcpAuto
+        ? collectMcpToolSchemas({ tools, agent, deny: mcpToolboxMcpDeny, logger })
+        : []
+      refreshToolboxTools(discovered.map((schema) => schema.name))
+      const whitelist = configuredWhitelist.filter((entry) => !isDeniedToolboxName(entry))
+      const knownNames = new Set(schemas.map((schema) => schema.name))
+      for (const schema of discovered) {
+        if (isDeniedToolboxName(schema.name)) continue
+        if (!knownNames.has(schema.name)) {
+          knownNames.add(schema.name)
+          schemas.push(schema)
+        }
+        if (!whitelist.includes(schema.name)) whitelist.push(schema.name)
+      }
       const servers = buildToolboxServers({
         schemas,
-        whitelist: Array.isArray(mcpToolWhitelist) ? mcpToolWhitelist.map(String) : [...DEFAULT_WHITELIST],
+        whitelist,
         serverName: mcpToolboxName,
         maxTools: mcpToolboxMaxTools,
         logger,
       })
       const declared = (servers[mcpToolboxName]?.tools ?? []).map((tool) => String(tool?.name ?? ''))
+      // The vendor receives every entry, not just the synthetic one: an MCP
+      // server it was not declared is one it refuses locally, so the audit and
+      // the change detection must cover all of them.
+      const declaredAll = Object.entries(servers)
+        .map(([server, entry]) => `${server}: ${(entry.tools ?? []).map((tool) => String(tool?.name ?? '')).join(',')}`)
+        .sort()
+      const declaredTotal = Object.values(servers).reduce((count, entry) => count + (entry.tools?.length ?? 0), 0)
       // Audit record, once per session and only when the set changes: the
       // declaration is the ground truth for "what did the vendor actually
       // receive", and the vendor's own account of its tool list is unreliable
       // (measured — it reported three tools while naming others in the same
       // answer). The panel renders it like any other record.
-      const signature = `${declared.length}:${declared.join(',')}`
+      const signature = declaredAll.join('|')
       if (declaredToolboxFor.get(sessionId) !== signature) {
         declaredToolboxFor.set(sessionId, signature)
         audit?.({
@@ -1116,11 +1196,11 @@ export function apply(ctx, config) {
           args: {},
           ok: true,
           route: 'declaration',
-          dshTool: `${declared.length} tool(s)`,
-          detail: declared.join(', ').slice(0, 600),
+          dshTool: `${declaredTotal} tool(s) in ${declaredAll.length} server(s)`,
+          detail: declaredAll.join(' | ').slice(0, 1200),
         })
       }
-      logger?.debug?.(`lanagent: DSH toolbox declared to the vendor (${declared.length} tool(s), agent=${agent === undefined ? 'none' : 'session'})`)
+      logger?.debug?.(`lanagent: DSH toolbox declared to the vendor (${declared.length} plain + ${declaredAll.length} server declaration(s), agent=${agent === undefined ? 'none' : 'session'})`)
       return servers
     } catch (error) {
       logger?.warn?.(`lanagent: cannot build the DSH toolbox (${error instanceof Error ? error.message : String(error)}); this turn runs with the vendor's own tools only`)

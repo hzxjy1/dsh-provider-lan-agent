@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { DEFAULT_TOOLBOX_NAME, buildToolboxServers, completeToolboxSchemas, matchesWhitelist, selectToolboxTools } from '../src/toolbox.js'
+import { DEFAULT_TOOLBOX_NAME, buildToolboxServers, collectMcpToolSchemas, completeToolboxSchemas, matchesWhitelist, selectToolboxTools } from '../src/toolbox.js'
 
 const objectSchema = (properties = { command: { type: 'string', description: 'cmd' } }) => ({
   type: 'object',
@@ -130,3 +130,56 @@ test('MCP tools are published under their real server, with bare names', () => {
   // Each entry must stay stdio-shaped: the vendor's parser requires it.
   for (const value of Object.values(servers)) assert.equal(value.type, 'stdio')
 })
+
+test('discovery finds MCP tools a scope cannot see directly', () => {
+  // Measured shape: every MCP server registers in a nested scope, so a PTC
+  // session's visible list omits them all while the registry still knows them.
+  const defs = new Map([
+    ['skill', { name: 'skill', description: 's', parameters: { type: 'object' } }],
+    ['mcp__open-computer-use__click', { name: 'mcp__open-computer-use__click', description: 'c', parameters: { type: 'object', properties: { x: { type: 'number' } } } }],
+    ['mcp__open-computer-use__list_apps', { name: 'mcp__open-computer-use__list_apps', description: 'l', parameters: { type: 'object' } }],
+  ])
+  const tools = {
+    schemas: () => [{ name: 'skill', description: 's', parameters: { type: 'object' } }],
+    view: () => ({ visible: new Map(), knownNames: new Set(['skill', ...defs.keys()]), restrictableNames: new Set() }),
+    get: (name) => defs.get(name),
+  }
+  assert.deepEqual(collectMcpToolSchemas({ tools, agent: {} }).map((s) => s.name).sort(), ['mcp__open-computer-use__click', 'mcp__open-computer-use__list_apps'])
+  // Plain tools are not MCP tools: discovery must not publish them again.
+  assert.equal(collectMcpToolSchemas({ tools, agent: {} }).some((s) => s.name === 'skill'), false)
+})
+
+test('discovery respects the deny list and drops what it cannot resolve', () => {
+  const defs = new Map([
+    ['mcp__playwright-edge__browser_click', { name: 'mcp__playwright-edge__browser_click', description: 'c', parameters: { type: 'object' } }],
+    ['mcp__open-computer-use__click', { name: 'mcp__open-computer-use__click', description: 'c', parameters: { type: 'object' } }],
+  ])
+  const tools = {
+    schemas: () => [],
+    // A known name whose definition resolution throws must not be declared: a
+    // tool the bridge cannot execute has no place in the vendor's toolbox.
+    view: () => ({ visible: new Map(), knownNames: [...defs.keys(), 'mcp__ghost__gone'], restrictableNames: new Set() }),
+    get: (name) => {
+      if (name === 'mcp__ghost__gone') throw new Error('registry exploded')
+      return defs.get(name)
+    },
+  }
+  assert.deepEqual(collectMcpToolSchemas({ tools, agent: {} }).map((s) => s.name).sort(), ['mcp__open-computer-use__click', 'mcp__playwright-edge__browser_click'])
+  assert.deepEqual(collectMcpToolSchemas({ tools, agent: {}, deny: ['mcp__playwright-edge__'] }).map((s) => s.name), ['mcp__open-computer-use__click'])
+  // No registry at all is not an error: the toolbox simply has no MCP tools.
+  assert.deepEqual(collectMcpToolSchemas({}), [])
+  assert.deepEqual(collectMcpToolSchemas({ tools: {} }), [])
+})
+
+test('a discovered server is declared with its bare tool names', () => {
+  const schemas = [
+    { name: 'mcp__open-computer-use__click', description: 'c', parameters: { type: 'object' } },
+    { name: 'mcp__open-computer-use__list_apps', description: 'l', parameters: { type: 'object' } },
+  ]
+  const whitelist = schemas.map((s) => s.name)
+  const servers = buildToolboxServers({ schemas, whitelist, serverName: 'dsh_toolbox' })
+  // Exactly the call the vendor makes, and exactly the validation it applies.
+  assert.deepEqual(Object.keys(servers), ['open-computer-use'])
+  assert.deepEqual(servers['open-computer-use'].tools.map((t) => t.name), ['click', 'list_apps'])
+})
+

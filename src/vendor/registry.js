@@ -177,6 +177,33 @@ const ENTRIES = {
     },
   },
 
+  /**
+   * The vendor's own skill loader.
+   *
+   * Its model calls `load_skill({skill: "<name>"})` (the desktop client also
+   * accepts `{path}`); the CLIENT is what reads the file, which is why the
+   * request's `skills` channel has to carry each command's absolute path. With
+   * no path in that channel the vendor answers the call itself with
+   * "skill path is None" and never forwards it — so this entry only ever runs
+   * once the catalogue is populated.
+   */
+  load_skill: {
+    plan(input) {
+      const name = String(input?.skill ?? input?.name ?? '').trim()
+      if (name.length > 0) return one('load_skill', 'skill', 'skill', { name })
+      const path = String(input?.path ?? '').trim()
+      if (path.length > 0) return one('load_skill', 'doc', 'read', { file_path: path })
+      return fail('load_skill', 'load_skill: 既没有 skill 名称也没有 path 参数')
+    },
+    render(plan, get) {
+      const call = get(plan.calls[0].key)
+      if (failed(call)) return errorAnswer(`技能加载失败：${String(call.text ?? '').trim()}`)
+      // A path-based load is a plain file read; a name-based load already is the
+      // skill body, so it must not be run through the read rendering.
+      return textAnswer(plan.calls[0].dshTool === 'read' ? readContent(call) : String(call?.text ?? ''))
+    },
+  },
+
   search_files: {
     plan(input) {
       if (String(input?.claude_name ?? '') === 'Glob') {

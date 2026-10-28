@@ -22,7 +22,7 @@ import { buildRules, buildTaskAgentBody, projectConversation, renderContent } fr
 import { LanAgentAuth, configValue } from '../src/auth.js'
 import { LanAgentCatalog, FALLBACK_GROUP_IDS } from '../src/catalog.js'
 import { createRefusingHandler } from '../src/ws.js'
-import { LanAgentAdapter } from '../index.js'
+import { apply, LanAgentAdapter } from '../index.js'
 
 /* ── framing ─────────────────────────────────────────────────────────────── */
 
@@ -325,6 +325,25 @@ test('adapter: completion samples local pressure with no purpose in scope', asyn
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('plugin: apply mounts with defaults without a temporal-dead-zone read', () => {
+  let registered
+  const ctx = {
+    logger: { info() {}, debug() {}, warn() {} },
+    get() { return undefined },
+    inject() {},
+    on() {},
+    fiber: { entry: { options: { id: 'llm-lan-agent' } } },
+    llm: {
+      registerAdapter(routes, adapter) { registered = { routes, adapter } },
+      registerConfigurableProviders() {},
+      registerModelDiscovery() {},
+    },
+  }
+  assert.doesNotThrow(() => apply(ctx, {}))
+  assert.deepEqual(registered.routes, ['lanagent'])
+  assert.equal(typeof registered.adapter.stream, 'function')
 })
 
 test('mapper: vendor application codes map onto DSH failure codes', () => {

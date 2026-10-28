@@ -155,6 +155,91 @@ export function completeToolboxSchemas({ schemas, whitelist, get }) {
   return [...byName.values()]
 }
 
+/**
+ * Enumerate every MCP-backed tool the registry currently knows.
+ *
+ * `tools.schemas(agent)` answers what one scope SEES, so it can miss tools that
+ * live in a nested scope (every MCP server registers one). A view's
+ * `knownNames` is the complete name list across those scopes, which is what
+ * makes auto-discovery possible at all: the manual whitelist was a hand-kept
+ * copy of exactly this information, and it went stale the moment a server was
+ * added to the profile (measured: the desktop MCP server was loaded, callable
+ * in the Web GUI, and simply absent from the vendor's toolbox — the vendor then
+ * rejected `use_mcp_tool` locally with "MCP server is not enabled", design
+ * notes §27).
+ *
+ * Each name is resolved through `tools.get`, the same presentation-agnostic
+ * path `completeToolboxSchemas` uses, so auto-discovered entries carry the real
+ * schema rather than a guess. A name that cannot be resolved is dropped: a tool
+ * the bridge cannot execute must not be declared.
+ *
+ * @param {object} options
+ * @param {object} [options.tools] the ToolRuntime service (`ctx.tools`).
+ * @param {object} [options.agent] the initiating Agent, to select the scope.
+ * @param {readonly string[]} [options.deny] prefixes excluded from discovery.
+ * @param {{warn?: Function, debug?: Function}} [options.logger]
+ * @returns {object[]} schemas shaped like `ctx.tools.schemas()` output.
+ */
+export function collectMcpToolSchemas({ tools, agent, deny = [], logger } = {}) {
+  if (tools === undefined || tools === null || typeof tools !== 'object') return []
+  const denied = (Array.isArray(deny) ? deny : []).map(String).filter((prefix) => prefix.length > 0)
+  const wanted = (name) => {
+    const text = String(name ?? '')
+    return text.length > 'mcp__'.length && text.startsWith('mcp__') && !denied.some((prefix) => text.startsWith(prefix))
+  }
+
+  const byName = new Map()
+  try {
+    for (const schema of typeof tools.schemas === 'function' ? tools.schemas(agent) ?? [] : []) {
+      if (wanted(schema?.name)) byName.set(schema.name, schema)
+    }
+  } catch (error) {
+    logger?.debug?.(`lanagent: could not list schemas for MCP discovery: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  // `knownNames` includes nested scopes AND names a restriction keeps away from
+  // the model; both matter here, because the vendor does not go through the
+  // presentation and the bridge enforces the real policy at execute time.
+  for (const scope of [agent, undefined]) {
+    let view
+    try {
+      view = typeof tools.view === 'function' ? tools.view(scope) : undefined
+    } catch (error) {
+      logger?.debug?.(`lanagent: could not view the tool registry for MCP discovery: ${error instanceof Error ? error.message : String(error)}`)
+      continue
+    }
+    for (const name of view?.knownNames ?? []) {
+      if (wanted(name) && !byName.has(name)) byName.set(name, undefined)
+    }
+  }
+
+  for (const [name, schema] of byName) {
+    if (schema !== undefined) continue
+    let definition
+    try {
+      definition = tools.get?.(name, agent) ?? tools.get?.(name)
+    } catch {
+      definition = undefined
+    }
+    if (definition === undefined || definition === null) {
+      byName.delete(name)
+      continue
+    }
+    const parameters = definition.parameters ?? definition.inputSchema ?? definition.schema ?? { type: 'object', properties: {} }
+    byName.set(name, {
+      name,
+      description: typeof definition.description === 'string' ? definition.description : '',
+      parameters,
+    })
+  }
+
+  const list = [...byName.values()]
+  logger?.debug?.(list.length === 0
+    ? 'lanagent: no MCP tools discovered for the toolbox'
+    : `lanagent: auto-discovered ${list.length} MCP tool(s): ${list.map((schema) => schema.name).join(', ')}`)
+  return list
+}
+
 export function selectToolboxTools(schemas, whitelist, { maxTools = 60, logger } = {}) {
   const chosen = []
   const seen = new Set()

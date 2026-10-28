@@ -39,7 +39,7 @@ WS    /ws-api/coagent/<session_id>  → 服务端的工具调用，在本进程�
 | MCP 工具**清单注入**（让厂商模型知道自己有哪些 MCP 工具可调） | ✅ M3 |
 | 旁路轻量通道（session-title / compaction） | ✅ M1 |
 
-**验收证据**：`node --test` **226 项全绿**（协议/认证/目录/工具翻译/派发/审计 + 19 个真实 fixture 的契约测试）；
+**验收证据**：`node --test` **230 项全绿**（协议/认证/目录/工具翻译/派发/审计 + 19 个真实 fixture 的契约测试）；
 真实服务验证脚本保留在本地，不随仓库发布；
 GUI 模型选择器出现 `LAN Agent` 与 6 个模型；**真实 GUI 会话端到端跑通**
 （厂商 agent 调 `execute_command` → 桥 → DSH 真跑 `pwd && ls api-reference.md && date +%s` → 输出正确，
@@ -53,10 +53,22 @@ GUI 模型选择器出现 `LAN Agent` 与 6 个模型；**真实 GUI 会话端�
 - `auth.mode: token`（逃生开关）：直接读已有 JWT，完全不登录。
 - `toolBridge: dsh`（默认）把厂商的工具调用送进 `ctx.tools.execute()`；
   改成 `refuse` 则一律回错误（隔离"协议问题"与"工具执行问题"时有用）。
-- `mcpToolbox: enabled`（默认）把白名单里的 DSH 工具合成一个 MCP 服务器（`dsh_toolbox`）声明给厂商，
-  于是它可以用 `use_mcp_tool` 调到串口、远程 claw、子代理、规划这些它自己没有的能力。
-  **注意成本**：白名单里的每个 schema 都要随每次请求发送——实测 `mcp__*` 全量是 64 个 schema ≈ 11.8K tokens，
-  默认收窄到 17 个 ≈ 2.6K tokens（`mcpToolWhitelist` 可调，支持 `prefix*`；`mcpToolboxMaxTools` 是上限）。
+- `mcpToolbox: enabled`（默认）把 DSH 的工具合成 MCP 声明发给厂商，于是它可以用 `use_mcp_tool`
+  调到串口、远程 claw、子代理、规划、桌面自动化这些它自己没有的能力。
+  **MCP 工具自动获取**：`mcpToolboxMcpAuto: true`（默认）每回合从 DSH 工具注册表发现所有已加载的
+  MCP 服务器，并按**真实服务器名**分别声明（`mcp__<server>__<tool>` → 服务器 `<server>` + 裸工具名）——
+  新增 MCP 服务器只要装进 DSH 就会自动出现在厂商的工具箱里，不必再手改 `mcpToolWhitelist`。
+  `mcpToolWhitelist` 因此只负责**非 MCP** 的工具名（`ask_user_question`、`skill`、`web_*`、`subagent`…）；
+  显式写 `mcp__…` 仍然有效，与自动发现去重，可作为自动模式失效时的基线。
+  **注意成本**：每个 schema 都要随每次请求发送——实测 `mcp__*` 全量是 64 个 schema ≈ 11.8K tokens，
+  当前组合 48 个；`mcpToolboxMcpDeny` 按前缀裁掉不值得的服务器，`mcpToolboxMaxTools`（当前 100）是硬上限——
+  留余量是必须的，因为超出时从白名单**尾部**丢弃（自动发现的排在最后，先被裁，显式条目受保护），
+  48 时刚好顶满，再加一个工具就会静默丢一整个服务器。
+  **厂商原生 skill 的机制**：请求里带一个 `skills` 通道（`{name,description,filePath,whenToUse}`，
+  `filePath` 是本机绝对路径）。模型调它自带的 `Skill` 时，**服务端**按名字查这条通道拿到路径，再向客户端
+  发一个 `read_files(path)`——读取由我们执行，正文回到模型。所以通道为空时它只会回 `skill path is None`
+  （实测：`ctx.skills.list()` 不传 scope 时恒为空，与 DSH 会话里明明有 13 个技能无关；已修）。
+  工具箱里的 `skill` 仍是更好的入口：它额外返回 `resourceBase`，技能正文里的相对路径靠它解析。
 - `toolDispatch: auto`（默认）自动选择派发路径：先直派，若该会话是 DSH 的 **PTC 呈现模式**
   （模型只被允许直接调 `run_code`）则改把调用包成 `run_code` 程序（DSH 文档化的路径）。
   可固定成 `direct` 或 `run_code` 排障。
@@ -141,13 +153,13 @@ EOF
 包以本地路径安装（profile 的 `node_modules/@local` 符号链接），不从公共 registry 发布：
 
 ```sh
-pnpm test          # 226 项离线测试
+pnpm test          # 230 项离线测试
 ```
 
 ## 测试
 
 ```sh
-node --test                        # 226 项离线测试：解析/差分/投影/rules/认证/目录 + 工具翻译 + 契约 fixture（无需锚点）
+node --test                        # 230 项离线测试：解析/差分/投影/rules/认证/目录 + 工具翻译 + 契约 fixture（无需锚点）
 node --test test/contract/*.test.mjs  # 只跑契约测试：19 个 case，value 与 text-only 两种 outcome
 ```
 
