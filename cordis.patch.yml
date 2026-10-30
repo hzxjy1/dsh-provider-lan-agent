@@ -129,18 +129,34 @@
         # Honour the vendor's per-call `requires_approval` through DSH's approval
         # seam, before anything runs or is parked (both routes behave alike).
         honorRequiresApproval: true
-        # Fallback budget for a loop-routed call when the vendor sends no timeout
-        # of its own. execute_command declares 300000ms, which wins over this.
-        loopBudgetMs: 240000
+        # CAP for a loop-routed parked call: the vendor's own declared timeout is
+        # honoured up to this cap, and this is also the fallback when the vendor
+        # declares no timeout. 360000 exceeds the vendor's measured ~333s ceiling,
+        # so our budget never preempts the vendor's own 300000ms (execute_command).
+        loopBudgetMs: 360000
         # Grace window for sibling tool requests: frames arriving inside it share
         # ONE assistant step (and therefore one loop step). Measured: this
         # vendor's server serializes its own calls (~1.0s apart), so the window
         # only pays off when frames really do arrive together.
         loopCollectMs: 40
-        # toolAuditFile is disabled by default. Set it to an absolute JSONL path
-        # to enable the translation-diagnostics panel.
+        # How long an approval request (policy=ask) may wait before the vendor is
+        # told the command was not approved. This used to be the 20s per-tool
+        # timeout, which failed honest slow approvals.
+        approvalTimeoutMs: 120000
         # Soft per-tool deadline. The vendor gives up on an unanswered call after
-        # tool's own timeout (the vendor sends timeout: 300000), so this stays a
+        # its own timeout (the vendor sends timeout: 300000), so this stays a
         # courtesy bound rather than a hard requirement (design notes §20).
+        # It bounds a tool that is actually RUNNING on the out-of-band (bridge)
+        # route; approval waiting no longer uses it.
         toolTimeoutMs: 20000
-        requestTimeoutMs: 300000
+        # The vendor has measured 282–312s silent gaps; at 300s our deadline cut
+        # them into "the turn exceeded the 300s request timeout" errors.
+        requestTimeoutMs: 600000
+        # toolAuditFile is normally disabled (leave it empty). This deployment
+        # enables it because otherwise the host's stdout — a tty here — is the
+        # only trace of a vendor tool request. The JSONL records every vendor tool
+        # request (request/settled events joined by requestId) plus one `turn`
+        # record per completed vendor turn, and it feeds the settings diagnostics
+        # panel. The parent directory is created on first write; the file is
+        # capped (~256 KiB) and truncated in place.
+        toolAuditFile: ~/.dsh/logs/lanagent-audit.jsonl

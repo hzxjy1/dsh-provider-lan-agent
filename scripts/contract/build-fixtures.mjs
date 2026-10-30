@@ -264,13 +264,38 @@ function main() {
       note: 'The preflight is answered locally: no DSH call, no approval, no card.',
     },
     {
-      id: 'refusal/ask_followup_question',
-      kind: 'refusal',
+      // Constructed, not harvested: the fleet has no ask_user_question dispatch in
+      // the pool yet, and this case exists to pin the interaction mapping. The
+      // answer is dsh-tool-ask-user's documented shape.
+      id: 'ask_followup_question/mapped',
+      kind: 'dsh',
       vendor: 'ask_followup_question',
       cwd: '/workspace',
-      arguments: { question: 'Continue?' },
+      arguments: { question: 'Continue with the migration?', options: ['Yes', 'No'] },
+      calls: [{
+        key: 'ask',
+        dshTool: 'ask_user_question',
+        isError: false,
+        text: JSON.stringify({ answers: [{ id: 'vendor-followup', selected: ['Yes'], custom: '' }] }),
+        value: { answers: [{ id: 'vendor-followup', selected: ['Yes'], custom: '' }] },
+      }],
+      expectedPlan: {
+        calls: [{
+          key: 'ask',
+          dshTool: 'ask_user_question',
+          arguments: { questions: [{ id: 'vendor-followup', question: 'Continue with the migration?', options: [{ label: 'Yes' }, { label: 'No' }] }] },
+        }],
+      },
+      note: "The vendor client's own interaction question mapped onto DSH ask_user_question (the fix for \"asked a question and stopped\").",
+    },
+    {
+      id: 'refusal/switch_mode',
+      kind: 'refusal',
+      vendor: 'switch_mode',
+      cwd: '/workspace',
+      arguments: { mode: 'code' },
       calls: [],
-      note: 'Vendor interaction tools stay unsupported in v1; refusal text comes from the registry entry.',
+      note: 'Interaction-only tools with no DSH counterpart stay refused; ask_followup_question is mapped instead.',
       observed: { isError: true, text: 'unsupported tool name' },
     },
     {

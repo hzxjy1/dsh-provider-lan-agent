@@ -192,6 +192,22 @@ test('a program-level failure passes through unchanged', async () => {
   assert.match(result.error.message, /CODE_RUN_FAILED/)
 })
 
+test('a program envelope carries the configured wall clock', async () => {
+  // DSH defaults the program to 120s and the deadline covers the nested call:
+  // without this, a bridged command that runs past two minutes is killed by the
+  // transport while the vendor is still waiting for it.
+  const registry = createRegistry({ mode: 'ptc' })
+  const dispatch = createToolDispatcher({ tools: registry, mode: DispatchMode.auto, programTimeoutMs: 360_000 })
+  await dispatch('bash', { command: 'sleep 200', description: 'd' }, context)
+  assert.deepEqual(NAMES(registry.calls), ['bash', 'run_code', 'bash'])
+  assert.equal(registry.calls[1].args.timeoutMs, 360_000)
+
+  const bare = createRegistry({ mode: 'ptc' })
+  const unbudgeted = createToolDispatcher({ tools: bare, mode: DispatchMode.auto })
+  await unbudgeted('bash', { command: 'pwd', description: 'd' }, context)
+  assert.equal('timeoutMs' in bare.calls[1].args, false, 'no configured budget: let DSH default it')
+})
+
 test('an explicit run_code request is never wrapped in another run_code program', async () => {
   const registry = createRegistry({ mode: 'ptc' })
   const dispatch = createToolDispatcher({ tools: registry, mode: DispatchMode.auto })

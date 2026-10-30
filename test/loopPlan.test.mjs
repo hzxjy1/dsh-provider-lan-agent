@@ -23,6 +23,7 @@ import {
   SENTINEL_OPEN,
   stripReadRendering,
   withStyle,
+  PTC_PROGRAM_MAX_MS,
 } from '../src/loopPlan.js'
 import { interpret, render } from '../src/vendor/registry.js'
 
@@ -111,6 +112,25 @@ test('withStyle run_code hands over one program and keeps the native calls', () 
   assert.equal(plan.transportCalls[0].dshTool, 'run_code')
   assert.match(plan.transportCalls[0].arguments.description, /read_files/)
   assert.match(plan.transportCalls[0].arguments.code, /tools\["read"\]/)
+})
+
+test('withStyle forwards the parked budget as the program wall clock', () => {
+  // DSH defaults a run_code program to 120s and the deadline covers nested
+  // waits, so a program without timeoutMs killed every call longer than two
+  // minutes (measured: a 300s command ended "execution deadline reached
+  // (120000ms)"). The parked budget must travel with the envelope.
+  const budgeted = withStyle(nativePlan(), 'run_code', { timeoutMs: 360_000 })
+  assert.equal(budgeted.transportCalls[0].arguments.timeoutMs, 360_000)
+
+  // DSH clamps anything above its own ceiling, so cap it here instead of
+  // letting the parked budget promise a deadline the transport will not honour.
+  const clamped = withStyle(nativePlan(), 'run_code', { timeoutMs: 1_800_000 })
+  assert.equal(clamped.transportCalls[0].arguments.timeoutMs, PTC_PROGRAM_MAX_MS)
+  assert.equal(PTC_PROGRAM_MAX_MS, 600_000)
+
+  // No budget, or a native plan: the argument is not invented.
+  assert.equal('timeoutMs' in withStyle(nativePlan(), 'run_code').transportCalls[0].arguments, false)
+  assert.equal('timeoutMs' in withStyle(nativePlan(), 'native', { timeoutMs: 1_000 }).transportCalls[0].arguments, false)
 })
 
 test('withStyle never nests run_code inside another run_code program', () => {

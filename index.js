@@ -40,10 +40,10 @@ import { createAuditWriter } from './src/audit.js'
 import { readAuditTail } from './src/auditFeed.js'
 import { DispatchMode, createToolDispatcher } from './src/dispatch.js'
 import { requestApproval, requiresApproval } from './src/approval.js'
-import { LOOP_EXCLUDED, isToolRefusal, linkParkedAbort, looksLikePtcPrompt, outcomesForPlan, withStyle } from './src/loopPlan.js'
+import { LOOP_EXCLUDED, PTC_PROGRAM_MAX_MS, isToolRefusal, linkParkedAbort, looksLikePtcPrompt, outcomesForPlan, withStyle } from './src/loopPlan.js'
 import { mapCommandText, mapPath, mapVendorPaths, resolveMappings, VENDOR_MEMORY_ROOT } from './src/paths.js'
 import { answerMemoryOp } from './src/memory.js'
-import { createLoopRoute, drainWithSuspension, extractToolResults, isLoopContinuation, toolCallChunks } from './src/loopRoute.js'
+import { createLoopRoute, drainWithSuspension, extractToolResults, isLoopContinuation, toolCallChunks, ASK_USER_BUDGET_MS } from './src/loopRoute.js'
 
 /** Backoff between retries of a fresh POST rejected with "-200 上一个任务仍在执行中". */
 const VENDOR_BUSY_RETRY_MS = 3000
@@ -182,8 +182,10 @@ function buildConfig(z) {
       .description('auto learns per session whether the presentation accepts direct names or only run_code; native/run_code pin it.'),
     loopCollectMs: z.natural().default(40)
       .description('Grace window (ms) for sibling tool requests so co-arriving calls share one agent step.'),
-    loopBudgetMs: z.natural().default(240_000)
-      .description('Fallback budget for a loop-routed call when the vendor sends no timeout of its own.'),
+    loopBudgetMs: z.natural().default(360_000)
+      .description('CAP for a loop-routed parked call, and the fallback budget when the vendor declares no timeout. The vendor declares 300000ms and its measured ceiling is ~333s, so this must stay above it or our budget preempts the vendor\'s own deadline.'),
+    approvalTimeoutMs: z.natural().default(120_000)
+      .description('How long an approval request may wait (policy=ask) before the call is refused. Independent of toolTimeoutMs, which used to cut honest slow approvals off at 20s.'),
     pathMappings: z.array(z.object({ from: z.string(), to: z.string() })).default([...DEFAULT_PATH_MAPPINGS])
       .description('Prefix mappings for paths the vendor names in its own world. A relative target is resolved against the session workspace.'),
     requireApprovalFor: z.array(z.string()).default([])
@@ -191,9 +193,11 @@ function buildConfig(z) {
     honorRequiresApproval: z.boolean().default(true)
       .description('Ask the user through the approval seam when the vendor marks a call requires_approval.'),
     toolAuditFile: z.string().default('')
-      .description('Optional JSONL path recording every vendor tool request and its outcome. Empty disables it.'),
-    toolTimeoutMs: z.natural().default(20_000),
-    requestTimeoutMs: z.natural().default(300_000),
+      .description('Optional JSONL path recording every vendor tool request, each turn\'s outcome, and feeding the diagnostics panel. Empty disables it.'),
+    toolTimeoutMs: z.natural().default(20_000)
+      .description('Deadline for a tool that is actually RUNNING on the out-of-band (bridge) route; the loop route and approval waits have their own budgets.'),
+    requestTimeoutMs: z.natural().default(600_000)
+      .description('Whole-request deadline. The vendor has measured 282-312s silent gaps, so a 300s deadline used to cut its turns into errors.'),
   })
 }
 
@@ -224,7 +228,7 @@ const THINK_OFF = new Set(['', 'off', 'none', 'no', 'disabled', 'minimal'])
  * installed third-party providers do.
  */
 class LanAgentAdapter {
-  constructor({ route, baseURL, user, auth, catalog, logger, systemPromptMode, thinkMode, purposePolicy, toolChannel, toolTimeoutMs, requestTimeoutMs, collectSkills, collectToolbox, createToolHandler, loopRoute, loopMode, loopCallStyle, loopBudgetMs, toolboxName, audit, resolveCwd, resolveTool, availableTools, measurePressure }) {
+  constructor({ route, baseURL, user, auth, catalog, logger, systemPromptMode, thinkMode, purposePolicy, toolChannel, toolTimeoutMs, approvalTimeoutMs, requestTimeoutMs, collectSkills, collectToolbox, createToolHandler, loopRoute, loopMode, loopCallStyle, loopBudgetMs, toolboxName, audit, resolveCwd, resolveTool, availableTools, measurePressure }) {
     this.route = route
     this.baseURL = baseURL.replace(/\/+$/, '')
     this.user = user
@@ -236,6 +240,7 @@ class LanAgentAdapter {
     this.purposePolicy = purposePolicy
     this.toolChannel = toolChannel
     this.toolTimeoutMs = toolTimeoutMs
+    this.approvalTimeoutMs = approvalTimeoutMs
     this.requestTimeoutMs = requestTimeoutMs
     this.collectSkills = collectSkills
     this.collectToolbox = collectToolbox
@@ -368,6 +373,8 @@ class LanAgentAdapter {
     let channel
     let toolCalls = 0
     let toolExecuted = 0
+    /** When this stream started; the turn record's duration is measured from it. */
+    const turnStartedAt = Date.now()
     /** Set when this stream parks its turn: the parked state owns the cleanup. */
     let suspended = false
     try {
@@ -457,6 +464,19 @@ class LanAgentAdapter {
             localUsage: purpose === undefined && this.measurePressure !== undefined
               ? () => this.measurePressure(sessionKey, options.tools)
               : undefined,
+            // One audit line per finished vendor turn: the finish kind, whether
+            // the turn ever showed answer text or called a tool, and how long it
+            // took. Without it, an "it stopped by itself" turn left no trace on
+            // disk at all (the plugin's logger goes to the host's tty).
+            onTerminal: (info) => this.#auditTurn({
+              sessionKey,
+              purpose,
+              model: options.model,
+              startedAt: turnStartedAt,
+              toolCalls,
+              toolExecuted,
+              info,
+            }),
           }, holder)
           const suspension = this.loopRoute?.arm(routeKey)
           let pendingRead
@@ -518,19 +538,34 @@ class LanAgentAdapter {
         }
       }
     } catch (error) {
+      const turnInfo = (kind, failure) => ({
+        reason: { kind, failure },
+        message: failure?.message,
+        sawAnswerText: undefined,
+        sawToolCalls: undefined,
+      })
       if (timedOut) {
         const failure = new LanAgentError(
           `lanagent: the turn exceeded the ${Math.round(this.requestTimeoutMs / 1000)}s request timeout`,
           { code: FailureCode.network },
         )
         this.logger?.warn?.(`lanagent: ${failure.message}`)
+        this.#auditTurn({
+          sessionKey, purpose, model: options.model, startedAt: turnStartedAt, toolCalls, toolExecuted,
+          info: turnInfo('error', failure.toFailure()),
+        })
         yield { type: 'finish', reason: { kind: 'error', failure: failure.toFailure() } }
       } else if (controller.signal.aborted && !(error instanceof LanAgentError)) {
+        const failure = new LanAgentError('lanagent: the turn was cancelled', { code: FailureCode.network }).toFailure()
+        this.#auditTurn({
+          sessionKey, purpose, model: options.model, startedAt: turnStartedAt, toolCalls, toolExecuted,
+          info: turnInfo('aborted', failure),
+        })
         yield {
           type: 'finish',
           reason: {
             kind: 'aborted',
-            failure: new LanAgentError('lanagent: the turn was cancelled', { code: FailureCode.network }).toFailure(),
+            failure,
           },
         }
       } else {
@@ -541,6 +576,10 @@ class LanAgentAdapter {
             cause: error,
           })
         this.logger?.warn?.(`lanagent: turn failed (${failure.code}): ${failure.message}`)
+        this.#auditTurn({
+          sessionKey, purpose, model: options.model, startedAt: turnStartedAt, toolCalls, toolExecuted,
+          info: turnInfo('error', failure.toFailure()),
+        })
         yield { type: 'finish', reason: { kind: 'error', failure: failure.toFailure() } }
       }
     } finally {
@@ -626,15 +665,18 @@ class LanAgentAdapter {
       const attempts = call.attempts ?? 1
       if (attempts < 2 && call.vendorArgs !== undefined && refused) {
         const nextStyle = plan.style === 'run_code' ? 'native' : 'run_code'
-        const replan = withStyle(plan, nextStyle)
-        this.loopStyle.set(routeKey, nextStyle)
         const spent = Date.now() - (call.parkedAt ?? Date.now())
+        const budgetMs = Math.max(15_000, (call.budgetMs ?? 360_000) - spent)
+        // The retry's program envelope gets the REMAINING budget, not the
+        // original one, so a PTC session cannot run the call twice over.
+        const replan = withStyle(plan, nextStyle, { timeoutMs: budgetMs })
+        this.loopStyle.set(routeKey, nextStyle)
         this.logger?.warn?.(`lanagent: ${call.vendorTool} was refused by the presentation; re-running it with the ${nextStyle} style`)
         this.loopRoute.park(routeKey, {
           ...call,
           plan: replan,
           attempts: attempts + 1,
-          budgetMs: Math.max(15_000, (call.budgetMs ?? 240_000) - spent),
+          budgetMs,
         })
         reparked = true
         continue
@@ -734,8 +776,55 @@ class LanAgentAdapter {
     })()
   }
 
+  /**
+   * One audit line per finished vendor turn.
+   *
+   * The audit file used to carry only tool requests, so a turn that ended
+   * without an answer left no trace anywhere: `logger.warn` goes to the host's
+   * stdout, which is a tty in a GUI deployment. This record carries the finish
+   * kind, whether the turn ever showed answer text, whether it called a tool, and
+   * how long it ran — enough to tell a real stop from the three failure shapes
+   * `src/stream.js` now reports, without replaying the session log.
+   *
+   * @param {object} input
+   * @param {string} input.sessionKey the DSH session.
+   * @param {string} [input.purpose] `session-title`/`compaction` for auxiliary calls.
+   * @param {string} [input.model]
+   * @param {number} input.startedAt
+   * @param {number} input.toolCalls
+   * @param {number} input.toolExecuted
+   * @param {object} input.info from the stream mapper (or a synthesized reason).
+   */
+  #auditTurn({ sessionKey, purpose, model, startedAt, toolCalls, toolExecuted, info }) {
+    if (this.audit === undefined) return
+    const kind = info?.reason?.kind ?? 'unknown'
+    const message = typeof info?.message === 'string'
+      ? info.message
+      : info?.reason?.failure?.message
+    try {
+      this.audit({
+        name: 'turn',
+        args: {
+          session: sessionKey,
+          purpose: purpose ?? 'chat',
+          model,
+          finish: kind,
+          ...info?.sawAnswerText === undefined ? {} : { answerText: info.sawAnswerText === true },
+          ...info?.sawToolCalls === undefined ? {} : { hadToolCall: info.sawToolCalls === true },
+        },
+        ok: kind === 'stop' || kind === 'max-tokens',
+        route: 'turn',
+        durationMs: Date.now() - startedAt,
+        dshTool: `calls=${toolCalls} executed=${toolExecuted}`,
+        ...typeof message === 'string' && message.length > 0 ? { detail: message } : {},
+      })
+    } catch (error) {
+      this.logger?.warn?.(`lanagent: recording the turn outcome failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   /** Turn one HTTP attempt into a resumable generator of DSH chunks. */
-  #createPump({ body, controller, onToolUse, localUsage }, holder) {
+  #createPump({ body, controller, onToolUse, localUsage, onTerminal }, holder) {
     const logger = this.logger
     const run = async function* run() {
       const response = await fetch(`${this.baseURL}/chatbot/v3/task-agent`, {
@@ -755,6 +844,7 @@ class LanAgentAdapter {
         logger,
         onToolUse: (block) => onToolUse?.(block),
         localUsage,
+        onTerminal,
       })
       holder.mapper = mapper
       const reader = response.body.getReader()
@@ -806,7 +896,7 @@ class LanAgentAdapter {
       resolveTool: this.resolveTool,
       availableTools: this.availableTools,
       styleFor: () => (this.loopCallStyle === 'auto' ? this.#styleFor(routeKey) : this.loopCallStyle),
-      budgetMs: this.loopBudgetMs ?? 240_000,
+      budgetMs: this.loopBudgetMs ?? 360_000,
       onBudgetExhausted: () => this.#drainParked(routeKey),
     }
   }
@@ -865,22 +955,31 @@ export function apply(ctx, config) {
   const authMode = configValue(authConfig, 'mode', 'login')
   const backoff = configValue(authConfig, 'loginBackoff', {})
   const catalogTtlMs = Number(configValue(config, 'catalogTtlMs', 21_600_000))
-  const requestTimeoutMs = Number(configValue(config, 'requestTimeoutMs', 300_000))
+  const requestTimeoutMs = Number(configValue(config, 'requestTimeoutMs', 600_000))
   const toolTimeoutMs = Number(configValue(config, 'toolTimeoutMs', 20_000))
+  const approvalTimeoutMs = Number(configValue(config, 'approvalTimeoutMs', 120_000))
   const toolBridgeMode = String(configValue(config, 'toolBridge', 'dsh'))
   const toolExecutionMode = String(configValue(config, 'toolExecution', 'loop'))
-  const loopBudgetMs = Number(configValue(config, 'loopBudgetMs', 240_000))
+  const loopBudgetMs = Number(configValue(config, 'loopBudgetMs', 360_000))
   const loopCallStyle = String(configValue(config, 'loopCallStyle', 'auto'))
   const loopCollectMs = Number(configValue(config, 'loopCollectMs', 40))
   // `loopBudgetMs` is a CAP, not just a fallback: a parked call must never
-  // outlive our own bound, whatever timeout the vendor declares. The env override
-  // exists so one instance can be tested without touching the shared config.
+  // outlive our own bound, whatever timeout the vendor declares. It sits above
+  // the vendor's measured ~333s ceiling on purpose, so the cap only ever bounds
+  // a turn the vendor itself has given up on. The env override exists so one
+  // instance can be tested without touching the shared config.
   const loopBudgetCapMs = (() => {
     const fromEnv = Number(process.env.DSH_LAN_AGENT_LOOP_BUDGET_MS)
     if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv
-    const configured = Number(configValue(config, 'loopBudgetMs', 240_000))
-    return Number.isFinite(configured) && configured > 0 ? configured : 240_000
+    const configured = Number(configValue(config, 'loopBudgetMs', 360_000))
+    return Number.isFinite(configured) && configured > 0 ? configured : 360_000
   })()
+  // The `run_code` envelope must outlive the call it carries. DSH's program
+  // default is 120s and the deadline covers nested waits, so a bridged LONG call
+  // died at two minutes whatever budget was parked for it (measured: a 300s
+  // command wrapped in run_code ended "execution deadline reached (120000ms)").
+  // Ask for the larger of our own budgets; DSH clamps it to its 600s ceiling.
+  const programTimeoutMs = Math.min(PTC_PROGRAM_MAX_MS, Math.max(loopBudgetCapMs, ASK_USER_BUDGET_MS))
   const pathMappings = Array.isArray(configValue(config, 'pathMappings', [...DEFAULT_PATH_MAPPINGS])) ? configValue(config, 'pathMappings', [...DEFAULT_PATH_MAPPINGS]) : [...DEFAULT_PATH_MAPPINGS]
   const honorRequiresApproval = configValue(config, 'honorRequiresApproval', true) !== false
   // The environment override exists so one instance can be tested without
@@ -1233,6 +1332,7 @@ export function apply(ctx, config) {
       routes: dispatchRoutes,
       sessionKey: sessionId,
       logger,
+      programTimeoutMs,
     })
     // The preflight's memory answer must name the same tree the local memory
     // responder (src/memory.js) writes, so both resolve the mapping against
@@ -1349,17 +1449,43 @@ export function apply(ctx, config) {
         const callId = typeof params?.block_id === 'string' && params.block_id.length > 0 ? params.block_id : randomId()
 
         // ── The vendor's own approval flag, honoured on BOTH routes and before
-        //    anything runs or is parked (design notes §23).
+        //    anything runs or is parked (design notes §23). The wait has its OWN
+        //    deadline (`approvalTimeoutMs`): it used to share the 20s per-tool
+        //    soft deadline, so an honest slow approval expired the call and the
+        //    vendor's model received a bogus "tool timeout" instead of the
+        //    human's decision — one more way a turn died mid-work.
         if (honorRequiresApproval && (requiresApproval(rawInput) || requireApprovalFor.includes(vendorName))) {
           const { agent } = resolveTurnContext(sessionId)
-          const verdict = await requestApproval({
-            approval: lookup('approval').service,
-            agent,
-            toolName: 'bash',
-            callId,
-            reason: `厂商请求执行需要审批的命令：${String(rawInput.command ?? '').slice(0, 160)}`,
-            signal: controller.signal,
-          })
+          const approvalAbort = new AbortController()
+          const abortApproval = () => approvalAbort.abort(controller.signal.reason)
+          if (controller.signal.aborted) abortApproval()
+          else controller.signal.addEventListener('abort', abortApproval, { once: true })
+          const approvalTimer = setTimeout(
+            () => approvalAbort.abort(new Error('lanagent: approval wait timed out')),
+            approvalTimeoutMs,
+          )
+          approvalTimer.unref?.()
+          let verdict
+          try {
+            verdict = await requestApproval({
+              approval: lookup('approval').service,
+              agent,
+              toolName: 'bash',
+              callId,
+              reason: `厂商请求执行需要审批的命令：${String(rawInput.command ?? '').slice(0, 160)}`,
+              signal: approvalAbort.signal,
+            })
+          } finally {
+            clearTimeout(approvalTimer)
+            controller.signal.removeEventListener?.('abort', abortApproval)
+          }
+          if (!verdict.granted && approvalAbort.signal.aborted) {
+            // The abort is ours (deadline) or the turn's, not the user's answer:
+            // say which, so "被拒绝" does not accuse the operator.
+            verdict = controller.signal.aborted
+              ? { granted: false, reason: '本轮已中止，审批等待随之结束' }
+              : { granted: false, reason: `等待审批超过 ${Math.round(approvalTimeoutMs / 1000)}s 仍未获回答` }
+          }
           audit?.({
             name: vendorName,
             args: rawInput,
@@ -1393,11 +1519,23 @@ export function apply(ctx, config) {
               requestId,
             })
             if (seamPlan.kind === 'dsh') {
-              const planned = withStyle(seamPlan, loop.styleFor())
               const declared = Number(rawInput.timeout)
-              // The agent's own per-tool timeout is honoured, but never beyond
-              // our cap (design notes §26): a stuck parked turn must expire.
-              const budgetMs = Number.isFinite(declared) && declared > 0 ? Math.min(declared, loop.budgetMs) : loop.budgetMs
+              // An interactive question waits for a HUMAN, not for a command: its
+              // budget must not be the per-tool one, or the user's answer arrives
+              // for a turn the parked budget already closed (see
+              // ASK_USER_BUDGET_MS). Everything else honours the vendor's own
+              // per-tool timeout, never beyond our cap (design notes §26).
+              const interactive = seamPlan.calls.some((plannedCall) => plannedCall.dshTool === 'ask_user_question')
+              const budgetMs = interactive
+                ? Math.max(ASK_USER_BUDGET_MS, Number.isFinite(declared) && declared > 0 ? declared : 0)
+                : Number.isFinite(declared) && declared > 0
+                  ? Math.min(declared, loop.budgetMs)
+                  : loop.budgetMs
+              // The program envelope carries the same budget: a PTC session runs
+              // this call inside `run_code`, whose default 120s program deadline
+              // would otherwise kill any call longer than two minutes — including
+              // a question for a human — long before the parked budget matters.
+              const planned = withStyle(seamPlan, loop.styleFor(), { timeoutMs: budgetMs })
               loop.route.park(loop.sessionKey, {
                 baseCallId: callId,
                 plan: planned,
@@ -1464,6 +1602,7 @@ export function apply(ctx, config) {
     purposePolicy: configValue(config, 'purposePolicy', 'light'),
     toolChannel: configValue(config, 'toolChannel', 'enabled'),
     toolTimeoutMs,
+    approvalTimeoutMs,
     requestTimeoutMs,
     collectSkills,
     collectToolbox,

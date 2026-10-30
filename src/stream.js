@@ -15,6 +15,13 @@
  *      and `partial` stays `false` throughout. DSH wants deltas, so the mapper
  *      diffs by block id and emits only the new tail.
  *
+ *   3. A turn may END WITHOUT AN ANSWER and still look finished: the service
+ *      declares `task_status: 'completed'` whatever its model did, and a cut
+ *      connection simply stops the body. Both used to become `finish: stop`, so
+ *      "it stopped by itself" was indistinguishable from a completed turn. The
+ *      mapper now tracks whether answer text and tool calls actually happened
+ *      and reports the three empty/truncated shapes as protocol errors.
+ *
  * @module src/stream
  */
 
@@ -100,9 +107,14 @@ const isToolNarration = (text) => TOOL_NARRATION.test(text.trim())
  *   from the host token meter. Called once when the vendor turn completes; its
  *   value becomes the DSH usage sample (the vendor `used_tokens` does not
  *   describe this request). Omitted for auxiliary calls.
+ * @param {(info: {reason: object, message?: string, sawAnswerText: boolean, sawToolCalls: boolean, finishReason: string|null}) => void}
+ *   [options.onTerminal] called once, when this mapper produces the turn's
+ *   terminal chunk. This is the turn-outcome trace: the reason (including the
+ *   three empty/truncated failures), whether any answer text was shown, and
+ *   whether a tool call happened. Never allowed to throw into the stream.
  * @param {{warn?: Function, debug?: Function}} [options.logger]
  */
-export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger } = {}) {
+export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, onTerminal, logger } = {}) {
   /** @type {Map<string, {index: number, text: string, closed: boolean}>} */
   const texts = new Map()
   /** @type {Map<string, {index: number, text: string, closed: boolean}>} */
@@ -114,6 +126,14 @@ export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger
   let finishReason = null
   let terminal = false
   let sawToolCalls = false
+  /**
+   * Did this turn show the user any answer text? A completion with none of it is
+   * the vendor stopping without saying anything — the shape the GUI used to
+   * show as a clean "finished". Reasoning does NOT count: the user saw nothing.
+   */
+  let sawAnswerText = false
+  /** Answer text arrived since the last tool call (the step's own final answer). */
+  let sawAnswerTextSinceTool = false
 
   const ensureText = (key, chunks) => {
     let state = texts.get(key)
@@ -124,6 +144,12 @@ export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger
       chunks.push({ type: 'block-start', index: state.index, blockType: 'text' })
     }
     return state
+  }
+
+  /** The turn did show the user answer text (not reasoning, not narration). */
+  const markAnswerText = () => {
+    sawAnswerText = true
+    sawAnswerTextSinceTool = true
   }
 
   const closeTexts = (chunks) => {
@@ -167,6 +193,40 @@ export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger
     chunks.push({ type: 'usage', usage: { inputTokens: tokens, outputTokens: 0, totalTokens: tokens } })
   }
 
+  /** One line per finished vendor turn, for the audit trail (never throws). */
+  const reportTerminal = (reason, message) => {
+    try {
+      onTerminal?.({ reason, message, sawAnswerText, sawToolCalls, finishReason })
+    } catch {
+      // A diagnostic must never break the turn it describes.
+    }
+  }
+
+  /** A protocol-error finish, with the same message kept for the audit trail. */
+  const errorFinish = (message) => ({
+    reason: { kind: 'error', failure: new LanAgentError(message, { code: FailureCode.protocol }).toFailure() },
+    message,
+  })
+
+  /**
+   * How a turn the vendor DECLARED COMPLETE should end.
+   *
+   * "Completed" is the vendor service's word, not evidence that its model
+   * answered: it ends a task just as readily when the model gave up right after
+   * a tool call, or when the turn produced nothing at all. Both used to become
+   * `finish: stop`, i.e. a finished-looking turn with no answer — the exact
+   * shape a user reports as "it stopped by itself".
+   */
+  const completionFinish = () => {
+    if (!sawAnswerText && !sawToolCalls) {
+      return errorFinish('lanagent: the vendor reported task completion without any answer text or tool call')
+    }
+    if (sawToolCalls && !sawAnswerTextSinceTool) {
+      return errorFinish('lanagent: the vendor reported task completion after a tool call, without a final answer')
+    }
+    return { reason: { kind: finishReason === 'max-tokens' ? 'max-tokens' : 'stop' } }
+  }
+
   return {
     /**
      * Feed one decoded stream object.
@@ -195,11 +255,24 @@ export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger
             logger?.debug?.(`lanagent: dropped tool narration block (${content.trim().slice(0, 60)})`)
           } else {
             const state = ensureText(key, chunks)
-            if (!state.closed) {
-              if (content.length > state.text.length) {
-                chunks.push({ type: 'text-delta', index: state.index, text: content.slice(state.text.length) })
-                state.text = content
+            const grew = content.length > state.text.length
+            if (state.closed) {
+              // A cumulative snapshot that grew after its block was closed (a
+              // reused block id): there is no open index for the tail to land on.
+              // Still record that an answer arrived — otherwise the completion
+              // check would blame the vendor for an answer this mapper dropped —
+              // and say so, because losing text silently is the failure that
+              // check exists to make visible.
+              if (grew && content.slice(state.text.length).trim().length > 0) {
+                markAnswerText()
+                logger?.warn?.(
+                  `lanagent: dropped ${content.length - state.text.length} chars of an already-closed text block (block ${key})`,
+                )
               }
+            } else if (grew) {
+              chunks.push({ type: 'text-delta', index: state.index, text: content.slice(state.text.length) })
+              state.text = content
+              if (content.trim().length > 0) markAnswerText()
             }
           }
         } else if (block.type === 'thinking') {
@@ -225,6 +298,9 @@ export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger
           closeReasonings(chunks)
           closeTexts(chunks)
           sawToolCalls = true
+          // The next answer text has to arrive AFTER this call, or the turn is
+          // being closed without a final answer.
+          sawAnswerTextSinceTool = false
           const id = typeof block.id === 'string' ? block.id : ''
           if (id.length > 0 && !toolUseIds.has(id)) {
             toolUseIds.add(id)
@@ -255,6 +331,7 @@ export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger
         if (!state.closed && data.content.length > state.text.length) {
           chunks.push({ type: 'text-delta', index: state.index, text: data.content.slice(state.text.length) })
           state.text = data.content
+          if (data.content.trim().length > 0) markAnswerText()
         }
       }
 
@@ -266,23 +343,20 @@ export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger
           closeReasonings(chunks)
           closeTexts(chunks)
           takeLocalUsage(chunks)
-          chunks.push({ type: 'finish', reason: { kind: finishReason === 'max-tokens' ? 'max-tokens' : 'stop' } })
+          const finish = completionFinish()
+          chunks.push({ type: 'finish', reason: finish.reason })
+          reportTerminal(finish.reason, finish.message)
           terminal = true
         } else if (data.task_status !== 'init' && data.task_status !== 'running') {
           closeReasonings(chunks)
           closeTexts(chunks)
-          chunks.push({
-            type: 'finish',
-            reason: {
-              kind: 'error',
-              failure: new LanAgentError(
-                typeof data.message === 'string' && data.message.length > 0
-                  ? data.message
-                  : `lanagent: task ended as "${data.task_status}"`,
-                { code: FailureCode.protocol },
-              ).toFailure(),
-            },
-          })
+          const finish = errorFinish(
+            typeof data.message === 'string' && data.message.length > 0
+              ? data.message
+              : `lanagent: task ended as "${data.task_status}"`,
+          )
+          chunks.push({ type: 'finish', reason: finish.reason })
+          reportTerminal(finish.reason, finish.message)
           terminal = true
         }
       }
@@ -301,6 +375,12 @@ export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger
      * a dropped connection ends the body without one — DSH still needs the
      * stream to close its blocks and end with exactly one terminal chunk.
      *
+     * Every way of reaching this method without an explicit `reason` is a
+     * FAILURE, not a finished turn: the vendor always sends `task_status` when
+     * it is done, so a body that closes first was cut, or the service hung up
+     * mid-turn. Defaulting to `stop` (as this used to) is how a truncated reply
+     * and a finished one became indistinguishable in the transcript.
+     *
      * @param {object} [reason] a DSH finish reason; defaults to a protocol error.
      * @returns {object[]} DSH chunks.
      */
@@ -311,18 +391,16 @@ export function createStreamMapper({ onToolUse, onTokenUsage, localUsage, logger
       closeTexts(chunks)
       if (reason !== undefined) {
         chunks.push({ type: 'finish', reason })
-      } else if (sawToolCalls) {
-        chunks.push({
-          type: 'finish',
-          reason: {
-            kind: 'error',
-            failure: new LanAgentError('lanagent: the vendor turn ended while a tool call was still pending', {
-              code: FailureCode.protocol,
-            }).toFailure(),
-          },
-        })
+        reportTerminal(reason, reason.kind === 'error' ? reason.failure?.message : undefined)
       } else {
-        chunks.push({ type: 'finish', reason: { kind: 'stop' } })
+        const message = sawToolCalls && !sawAnswerText
+          ? 'lanagent: the vendor stream ended while a tool call was still pending'
+          : !sawAnswerText && !sawToolCalls
+            ? 'lanagent: the vendor stream ended before producing any answer or tool call'
+            : 'lanagent: the vendor stream ended without a terminal task status (the connection was cut)'
+        const finish = errorFinish(message)
+        chunks.push({ type: 'finish', reason: finish.reason })
+        reportTerminal(finish.reason, finish.message)
       }
       terminal = true
       return chunks

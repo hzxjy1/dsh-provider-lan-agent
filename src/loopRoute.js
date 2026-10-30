@@ -33,8 +33,33 @@
  * @module src/loopRoute
  */
 
-/** Default per-tool budget when the vendor sends no timeout of its own. */
-export const DEFAULT_TOOL_BUDGET_MS = 240_000
+/**
+ * Default per-tool budget when the vendor sends no timeout of its own.
+ *
+ * The vendor declares 300000ms for `execute_command` and its measured ceiling is
+ * ≈333s, so a 240000ms budget used to expire BEFORE the vendor's own deadline:
+ * our "tool did not finish" error answered the call while the vendor was still
+ * waiting, and its model then gave up on the step. The value now sits above the
+ * measured ceiling, so it only ever bounds a turn the vendor has abandoned too.
+ */
+export const DEFAULT_TOOL_BUDGET_MS = 360_000
+
+/**
+ * Budget for a parked interactive question (`ask_user_question`).
+ *
+ * A tool that waits for a human has no meaningful vendor timeout: the vendor's
+ * own `timeout` field was never meant for "how long may the user think". Expiring
+ * this at the normal budget told the vendor's model the question failed, and the
+ * user's eventual answer arrived for a turn that had already given up.
+ *
+ * Nine minutes is the practical ceiling rather than a preference: in a PTC
+ * session the question runs inside a generated `run_code` program, and DSH caps
+ * that program's wall clock at 600000ms TOTAL, nested waits included. Staying one
+ * minute under the cap lets this budget answer the vendor with a clean timeout
+ * before DSH kills the program under it. In a native session the same value
+ * applies for consistency.
+ */
+export const ASK_USER_BUDGET_MS = 540_000
 
 /**
  * How long to wait for sibling tool requests before suspending the turn.

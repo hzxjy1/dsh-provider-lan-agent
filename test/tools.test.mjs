@@ -387,12 +387,36 @@ test('use_mcp_tool into a real MCP server still maps to mcp__server__tool', asyn
 
 test('unknown tools and DSH failures both answer with a readable error', async () => {
   const { handle } = bridgeFor({})
-  const unknown = await handle({ name: 'ask_followup_question' }, ctx)
-  assert.match(unknown.error.message, /ask_followup_question/)
+  // `switch_mode` is an interaction-only vendor tool with no DSH counterpart.
+  // Unlike `ask_followup_question` (mapped onto ask_user_question) it is refused.
+  const unknown = await handle({ name: 'switch_mode' }, ctx)
+  assert.match(unknown.error.message, /switch_mode/)
 
   const failing = bridgeFor({ write: { isError: true, error: { message: 'permission denied' } } })
   const failed = await failing.handle({ name: 'write_to_file', arguments: { path: 'a', content: 'b' } }, ctx)
   assert.match(failed.error.message, /permission denied/)
+})
+
+test('ask_followup_question becomes a real ask_user_question call', async () => {
+  // This is the fix for "it asked a question and stopped": the vendor's own
+  // interaction tool maps onto DSH's question tool, whose answer is a normal
+  // tool result, so the vendor model continues in the same turn.
+  const { handle, calls } = bridgeFor({
+    ask_user_question: {
+      isError: false,
+      content: [{ type: 'text', text: JSON.stringify({ answers: [{ id: 'vendor-followup', selected: ['继续'], custom: '' }] }) }],
+      value: { answers: [{ id: 'vendor-followup', selected: ['继续'], custom: '' }] },
+    },
+  })
+  const answer = await handle({ name: 'ask_followup_question', arguments: { question: '要继续吗？', options: ['继续', '停止'] } }, ctx)
+  assert.equal(calls[0].name, 'ask_user_question')
+  assert.deepEqual(calls[0].args.questions, [{
+    id: 'vendor-followup',
+    question: '要继续吗？',
+    options: [{ label: '继续' }, { label: '停止' }],
+  }])
+  assert.match(answer.content[0].text, /要继续吗？/)
+  assert.match(answer.content[0].text, /继续/)
 })
 
 test('the skill loader and the web tools pass through to DSH', async () => {

@@ -34,7 +34,8 @@ raw vendor request
 
 - `kind: 'dsh'` — one or more DSH calls with keys and mapped arguments
 - `kind: 'local'` — an answer that needs no DSH call (environment preflight)
-- `kind: 'refusal'` — unknown tool, interaction-only tool, or missing arguments
+- `kind: 'refusal'` — unknown tool, unmapped interaction-only tool, or missing
+  arguments
 
 Plans hold no functions and no WebSocket responder. The loop route can therefore
 keep a plan across two DSH steps; the bridge runner executes it in the same step.
@@ -96,6 +97,37 @@ the answer is known — so "parked and never resumed" is visible without guessin
 from timestamps. The bridge answers in the same step and emits `settled` only.
 The JSONL writer persists `requestId` and `event`; the panel can join them.
 
+## Interaction and completion
+
+The only interaction tool with a DSH counterpart is the vendor's
+`ask_followup_question`. `interpret` maps it to a real DSH `ask_user_question`
+call (`{questions:[{id:'vendor-followup', question, options?}]}`); the DSH agent loop executes
+it, and the human answer returns in the same turn as a normal tool result, so the
+vendor model continues instead of falling back to a plain-text question and ending
+the turn. A parked ask gets a nine-minute budget (`ASK_USER_BUDGET_MS`,
+540,000 ms — one minute under DSH's 600,000 ms `run_code` program ceiling, which
+covers nested waits), so a user who walks away does not become a tool timeout.
+In a `ptc` session the call travels inside a generated `run_code` program, whose
+envelope now carries `timeoutMs` from the parked call's budget: DSH's program
+deadline defaults to 120000ms and covers nested waits, so without it any call
+longer than two minutes (question included) was cancelled by the transport.
+
+`enter_plan_mode`, `plan_mode_respond`, `switch_mode`, `todo_list_snapshot` and
+`restore_tool` stay refusals — they have no DSH equivalent. The rules channel no
+longer tells the model to ask in text, because the DSH toolbox already publishes
+`ask_user_question`.
+
+`src/stream.js` reports completion honestly. `task_status: 'completed'` used to
+become `finish: stop` unconditionally, and a body EOF with no terminal status
+defaulted to `stop` unless a tool call had been seen — so a fake completion looked
+like a successful empty turn. The mapper now tracks whether the turn produced
+answer text and whether a tool call is pending, and reports three protocol errors
+instead: `completed` with no answer text and no tool call in the whole turn,
+`completed` right after a tool call with no final answer since that call, and a
+body EOF with no terminal status (pending call / no content / connection cut).
+Reasoning-only turns count as no answer text by design: nothing was shown to the
+user. The GUI now shows an error banner instead of a normal-looking stop.
+
 ## Memory policy
 
 The agent keeps a memory tree under its own CLI's home. Path mapping redirects
@@ -116,14 +148,17 @@ route.
 - `pathMappings` defaults to the agent CLI's home mapped to
   `.lan-agent-memory` under the session workspace. Override it only when the
   deployment's spelling differs.
-- `toolAuditFile` is disabled by default; set it to an absolute JSONL path to
-  enable the translation-diagnostics panel.
+- `toolAuditFile` is normally disabled (empty). This deployment enables it at the
+  absolute path `~/.dsh/logs/lanagent-audit.jsonl`, because otherwise
+  the host's stdout — a tty here — is the only trace. The JSONL carries a
+  `request` / `settled` pair per vendor tool request, joined by `requestId`, plus
+  one `turn` record per completed vendor turn.
 
 ## Tests
 
 - `node --test` — offline suite (protocol, auth, catalog, projection, tool
   translation, dispatch, audit, and contract fixtures).
-- `test/contract/` — 19 real cases (success/failure/multi-path/fuzzy edit/MCP/
+- `test/contract/` — 20 cases (success/failure/multi-path/fuzzy edit/MCP/
   local preflight/refusal) rendered twice, with and without a structured value.
 - `scripts/contract/` — maintainer-only fixture collection from local session
   logs; the raw pool is not committed.

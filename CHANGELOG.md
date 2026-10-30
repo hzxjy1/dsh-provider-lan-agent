@@ -1,5 +1,84 @@
 # Changelog
 
+## 1.4.0 — 2026-10-30
+
+### Added
+
+- `approvalTimeoutMs` (default 120000): waiting for a human approval is now a
+  separate budget from the per-tool timeout. Before, an approval that took more
+  than `toolTimeoutMs` (20000) was reported to the vendor as a bogus "tool
+  timeout", so an honest slow decision failed the very tool it was approving. The
+  new budget bounds only the approval request, when policy is `ask` and the
+  vendor call carries `requires_approval`.
+- `toolAuditFile` is enabled in the shipped row at the absolute path
+  `~/.dsh/logs/lanagent-audit.jsonl`. With it empty — the plugin
+  default — the JSONL writer is never created (`src/audit.js` no-ops) and every
+  `logger.warn('lanagent: …')` goes to the host's stdout, which is a tty in this
+  deployment, so nothing reached disk and the last investigation had to
+  reverse-engineer the session JSONL instead. The writer records every vendor
+  tool request as `request` / `settled` rows joined by `requestId`, plus one
+  `turn` record per completed vendor turn (finish kind, answer-text and tool-call
+  counts, duration), so fake completions are visible in the same file. The
+  settings diagnostics panel reads that file (`AUDIT_ROUTE`). The directory must
+  exist and be writable; the file is capped (~256 KiB) and truncated in place.
+- The vendor's `ask_followup_question` (`{question, options?}`) is translated
+  into a real DSH `ask_user_question` call
+  (`{questions:[{id:'vendor-followup', question, options?}]}`) instead of being refused. The
+  DSH agent loop executes it, the human answer comes back in the SAME turn as a
+  normal tool result, and the vendor model continues working. A parked ask gets a
+  long budget (`ASK_USER_BUDGET_MS`, 540,000 ms = 9 min, one minute under DSH's
+  600,000 ms `run_code` program ceiling), so a user who walks away does not turn
+  into a tool timeout.
+
+### Changed
+
+- `loopBudgetMs` 240000 → 360000. The row is a cap for a loop-routed parked call
+  (the vendor's own declared timeout is honoured up to it) and the fallback when
+  the vendor declares none. At 240000 our cap preempted the vendor's declared
+  300000ms through the `Math.min(declared, cap)` clamp, while the vendor's
+  measured ceiling is ~333s. 360000 exceeds that ceiling, so our budget never
+  preempts the vendor's own deadline.
+- `requestTimeoutMs` 300000 → 600000. The vendor has a measured cluster of
+  282–312s silent waits, and our 300s deadline cut them into "the turn exceeded
+  the 300s request timeout" errors (12 of 140 lan-agent turns ended in error,
+  8.6%). 600s lets the vendor finish on its own schedule.
+- `toolTimeoutMs` stays 20000, but its meaning is narrower now: it bounds a tool
+  that is actually RUNNING on the out-of-band (bridge) route. Approval waiting no
+  longer uses it.
+- The remaining interaction tools — `enter_plan_mode`, `plan_mode_respond`,
+  `switch_mode`, `todo_list_snapshot`, `restore_tool` — stay refused: they have no
+  DSH counterpart. The rules channel (`src/request.js`) no longer tells the model
+  to ask in text; the DSH toolbox already publishes `ask_user_question`.
+
+### Fixed
+
+- Loop-routed calls in a PTC session no longer die at DSH's default program
+  deadline. A `ptc` session runs the call inside a generated `run_code` program,
+  and that program's wall clock — 120000ms by default, capped at 600000ms, and
+  covering nested tool and approval waits — used to expire long before the parked
+  budget did. Measured in the affected session: a command budgeted for 300s ended
+  as `code run failed (timeout): execution deadline reached (120000ms)`. The
+  program envelope now carries `timeoutMs` from the parked call's own budget
+  (clamped to DSH's 600000ms ceiling), on the loop route and on the out-of-band
+  bridge route alike.
+- "Fake completion" no longer masquerades as a normal stop. `src/stream.js` used
+  to translate the vendor's `task_status: 'completed'` unconditionally into
+  `finish: stop`, and a body EOF with no terminal status defaulted to `stop`
+  unless a tool call had been seen. The mapper now tracks whether the turn
+  produced answer text and whether a tool call is pending, and reports three
+  protocol errors instead: `completed` with no answer text and no tool call in
+  the whole turn; `completed` right after a tool call with no final answer text
+  since that call; and body EOF with no terminal task status, always a protocol
+  error (pending tool call / no content / connection cut) instead of a silent
+  `stop`. Reasoning/thinking-only turns count as "no answer text" deliberately:
+  nothing was shown to the user. The GUI now shows an error banner instead of a
+  successful-but-empty turn.
+- The vendor's interaction ask used to be refused by `src/vendor/registry.js`
+  (`INTERACTION_TOOLS`, `REFUSAL_CODE -10001`, "current v1 does not support it;
+  ask in text"). That refusal is why the vendor model fell back to a plain-text
+  question and the turn ended ("it just stopped by itself"). For
+  `ask_followup_question` the refusal is replaced by the translation above.
+
 ## 1.3.1 — 2026-10-27
 
 ### Changed
@@ -174,7 +253,7 @@
 - The shipped base URL is the LAN origin over HTTP, because the service's
   certificate does not cover the IP. Use it only on a trusted network.
 
-- `test/contract/fixtures.json`: 19 cases harvested from real lanagent sessions
+- `test/contract/fixtures.json`: 20 cases curated from real lanagent sessions
   (66 sessions, 455 text+value pairs), sanitized for paths/accounts/session ids.
 - `test/contract/seam.test.mjs`: every case is rendered twice — with the
   bridge's structured `value` and with the loop's text-only outcome — and both

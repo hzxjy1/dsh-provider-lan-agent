@@ -97,7 +97,10 @@ test('mapper: a pure tool-narration block is dropped without opening a text bloc
   ]
   assert.equal(chunks.filter((chunk) => chunk.type === 'text-delta').length, 0)
   assert.equal(chunks.filter((chunk) => chunk.type === 'block-end').length, 0)
-  assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+  // Narration is not an answer: a turn whose only text was progress lines has
+  // nothing to show, so its completion is reported as the empty turn it is.
+  assert.equal(chunks.at(-1).reason.kind, 'error')
+  assert.match(chunks.at(-1).reason.failure.message, /without any answer text/)
 })
 
 test('mapper: the long-tool progress variant is dropped as a whole block', () => {
@@ -110,7 +113,7 @@ test('mapper: the long-tool progress variant is dropped as a whole block', () =>
     ]
     assert.equal(chunks.filter((chunk) => chunk.type === 'text-delta').length, 0, line)
     assert.equal(chunks.filter((chunk) => chunk.type === 'block-end').length, 0, line)
-    assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+    assert.equal(chunks.at(-1).reason.kind, 'error', line)
   }
 })
 
@@ -194,7 +197,10 @@ test('mapper: a thinking block is closed when the transport ends without a task 
   ]
   assert.equal(chunks[0].blockType, 'reasoning')
   assert.equal(chunks.some((chunk) => chunk.type === 'block-end' && chunk.block.type === 'reasoning'), true)
-  assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+  // Reasoning alone is not an answer, and a body that ends without a terminal
+  // task status was cut: both are protocol errors, never a silent `stop`.
+  assert.equal(chunks.at(-1).reason.kind, 'error')
+  assert.equal(chunks.at(-1).reason.failure.code, FailureCode.protocol)
 })
 
 test('mapper: tool_use yields no DSH chunk and is reported once per id', () => {
@@ -238,6 +244,7 @@ test('mapper: the vendor token_usage never becomes a DSH usage chunk', () => {
 test('mapper: the host local pressure becomes the completion usage sample', () => {
   const mapper = createStreamMapper({ localUsage: () => 4242.4 })
   const chunks = [
+    ...mapper.mapObject(textObject('answer', 'done')),
     ...mapper.mapObject({
       code: '0',
       data: { block: [{ id: 'u', type: 'system_info', event: 'token_usage', data: { used_tokens: 16271, max_token: 204800 } }] },
@@ -280,6 +287,7 @@ test('adapter: completion samples local pressure with no purpose in scope', asyn
   }
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => response
+  const records = []
   try {
     const adapter = new LanAgentAdapter({
       route: 'lanagent',
@@ -302,7 +310,7 @@ test('adapter: completion samples local pressure with no purpose in scope', asyn
       loopCallStyle: 'auto',
       loopBudgetMs: 1000,
       toolboxName: 'dsh_toolbox',
-      audit: undefined,
+      audit: (record) => records.push(record),
       resolveCwd: () => '/tmp',
       resolveTool: () => undefined,
       availableTools: [],
@@ -322,6 +330,16 @@ test('adapter: completion samples local pressure with no purpose in scope', asyn
       totalTokens: 12345,
     })
     assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+    // The turn outcome reaches the audit trail: a turn that ends without an
+    // answer must be diagnosable from the file alone (the plugin's logger goes
+    // to the host's tty, which nobody reads in a GUI deployment).
+    const turn = records.find((record) => record.name === 'turn')
+    assert.ok(turn !== undefined, 'a turn record must be written')
+    assert.equal(turn.route, 'turn')
+    assert.equal(turn.ok, true)
+    assert.equal(turn.args.finish, 'stop')
+    assert.equal(turn.args.answerText, true)
+    assert.equal(turn.args.session, 'session-test')
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -371,18 +389,23 @@ test('mapper: vendor application codes map onto DSH failure codes', () => {
   })
 })
 
-test('mapper: end() closes blocks exactly once and terminal state wins', () => {
+test('mapper: end() closes blocks exactly once, and a cut body is an error', () => {
   const mapper = createStreamMapper()
   mapper.mapObject(textObject('a', 'hi'))
   const closed = mapper.end()
   assert.equal(closed.filter((chunk) => chunk.type === 'block-end').length, 1)
-  assert.deepEqual(closed.at(-1), { type: 'finish', reason: { kind: 'stop' } })
-  assert.deepEqual(mapper.end(), [])
+  const finish = closed.at(-1)
+  assert.equal(finish.type, 'finish')
+  // A body that closes before the vendor's terminal status was cut mid-turn.
+  // Reporting `stop` here is how a truncated reply used to look finished.
+  assert.equal(finish.reason.kind, 'error')
+  assert.match(finish.reason.failure.message, /without a terminal task status/)
+  assert.deepEqual(mapper.end(), [], 'exactly one terminal chunk')
 
   const completed = createStreamMapper()
   completed.mapObject(textObject('a', 'hi'))
   completed.mapObject({ code: '0', data: { task_status: 'completed' } })
-  assert.deepEqual(completed.end(), [])
+  assert.deepEqual(completed.end(), [], 'the vendor terminal wins over the transport end')
 })
 
 test('mapper: a turn that ends with a pending tool call reports an error, not a silent stop', () => {
@@ -391,6 +414,66 @@ test('mapper: a turn that ends with a pending tool call reports an error, not a 
   const chunks = mapper.end()
   assert.equal(chunks.at(-1).reason.kind, 'error')
   assert.equal(chunks.at(-1).reason.failure.code, FailureCode.protocol)
+})
+
+test('mapper: a completion with no answer text and no tool call is an error, not a silent stop', () => {
+  // The vendor service declares a task complete whatever its model did. A turn
+  // that produced nothing used to arrive as `finish: stop` — an empty turn that
+  // looked finished, which is what a user reports as "it stopped by itself".
+  const mapper = createStreamMapper()
+  const chunks = mapper.mapObject({ code: '0', data: { task_status: 'completed' } })
+  assert.equal(chunks.at(-1).type, 'finish')
+  assert.equal(chunks.at(-1).reason.kind, 'error')
+  assert.equal(chunks.at(-1).reason.failure.code, FailureCode.protocol)
+  assert.match(chunks.at(-1).reason.failure.message, /without any answer text or tool call/)
+})
+
+test('mapper: reasoning alone does not make a completion count as answered', () => {
+  const mapper = createStreamMapper()
+  mapper.mapObject(thinkingObject('th', 'I considered the options'))
+  const chunks = mapper.mapObject({ code: '0', data: { task_status: 'completed' } })
+  assert.equal(chunks.at(-1).reason.kind, 'error')
+})
+
+test('mapper: a completion right after a tool call with no final answer is an error', () => {
+  const mapper = createStreamMapper()
+  mapper.mapObject({ code: '0', data: { block: [{ id: 't', type: 'tool_use', name: 'execute_command', params: {} }] } })
+  const chunks = mapper.mapObject({ code: '0', data: { task_status: 'completed' } })
+  assert.equal(chunks.at(-1).reason.kind, 'error')
+  assert.match(chunks.at(-1).reason.failure.message, /after a tool call, without a final answer/)
+})
+
+test('mapper: a final answer after the last tool call still ends with stop', () => {
+  const mapper = createStreamMapper()
+  mapper.mapObject({ code: '0', data: { block: [{ id: 't', type: 'tool_use', name: 'execute_command', params: {} }] } })
+  mapper.mapObject(textObject('answer', 'done: the file was updated'))
+  const chunks = mapper.mapObject({ code: '0', data: { task_status: 'completed' } })
+  assert.deepEqual(chunks.at(-1), { type: 'finish', reason: { kind: 'stop' } })
+})
+
+test('mapper: the turn outcome reaches onTerminal exactly once', () => {
+  const seen = []
+  const mapper = createStreamMapper({ onTerminal: (info) => seen.push(info) })
+  mapper.mapObject({ code: '0', data: { block: [{ id: 't', type: 'tool_use', name: 'execute_command', params: {} }] } })
+  mapper.mapObject(textObject('a', 'answer'))
+  mapper.mapObject({ code: '0', data: { task_status: 'completed' } })
+  mapper.end()
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].reason.kind, 'stop')
+  assert.equal(seen[0].sawAnswerText, true)
+  assert.equal(seen[0].sawToolCalls, true)
+
+  const failed = []
+  const truncated = createStreamMapper({ onTerminal: (info) => failed.push(info) })
+  truncated.end()
+  assert.equal(failed.length, 1)
+  assert.equal(failed[0].reason.kind, 'error')
+  assert.match(failed[0].message, /before producing any answer/)
+
+  // A diagnostic that throws must never break the turn it describes.
+  const angry = createStreamMapper({ onTerminal: () => { throw new Error('audit exploded') } })
+  const chunks = angry.mapObject({ code: '0', data: { task_status: 'completed' } })
+  assert.equal(chunks.at(-1).type, 'finish')
 })
 
 /* ── request projection ─────────────────────────────────────────────────── */

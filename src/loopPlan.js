@@ -126,6 +126,19 @@ export function linkParkedAbort(signal, cancel) {
 }
 
 /**
+ * DSH's hard ceiling for one `run_code` program's wall clock.
+ *
+ * `ptc-runtime-node` defaults `timeoutMs` to 120000 and caps it at 600000, and
+ * the deadline covers EVERY nested tool and approval wait inside the program
+ * (`dsh-tools` `run_code.timeoutMs`: "elapsed-time budget … including nested tool
+ * and approval waits"). A generated program that does not name its timeout
+ * therefore dies at 120s and takes the parked vendor call with it — measured in
+ * the affected session: a wrapped command budgeted for 300s ended as
+ * `code run failed (timeout): execution deadline reached (120000ms)`.
+ */
+export const PTC_PROGRAM_MAX_MS = 600_000
+
+/**
  * Wrap a seam plan in the transport the presentation accepts.
  *
  * `plan.calls` stays the native plan: rendering, audit, and retry all speak that
@@ -134,14 +147,22 @@ export function linkParkedAbort(signal, cancel) {
  *
  * @param {object} plan the value returned by the seam's `interpret`.
  * @param {'native'|'run_code'} style
+ * @param {object} [options]
+ * @param {string} [options.runCode] the transport tool name.
+ * @param {number} [options.timeoutMs] the parked call's budget, forwarded to the
+ *   program so DSH's 120s default cannot preempt it. Clamped to
+ *   {@link PTC_PROGRAM_MAX_MS}, which is all DSH will honour.
  * @returns {object} a plain plan value with `style` and `transportCalls`.
  */
-export function withStyle(plan, style, { runCode = PLAN_TOOL_NAMES.runCode } = {}) {
+export function withStyle(plan, style, { runCode = PLAN_TOOL_NAMES.runCode, timeoutMs } = {}) {
   // `run_code` is directly callable in a PTC presentation; wrapping it in
   // another `run_code` program would nest the transport inside itself.
   if (style !== 'run_code' || plan.calls.some((call) => call.dshTool === runCode)) {
     return { ...plan, style: 'native', transportCalls: plan.calls }
   }
+  const programMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.min(Math.round(timeoutMs), PTC_PROGRAM_MAX_MS)
+    : undefined
   return {
     ...plan,
     style: 'run_code',
@@ -151,6 +172,7 @@ export function withStyle(plan, style, { runCode = PLAN_TOOL_NAMES.runCode } = {
       arguments: {
         description: `lanagent 委派: ${plan.vendor}`,
         code: programFor(plan.calls),
+        ...programMs === undefined ? {} : { timeoutMs: programMs },
       },
     }],
   }

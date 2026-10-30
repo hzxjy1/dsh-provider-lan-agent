@@ -213,14 +213,57 @@ test('mapping happens during interpretation, before planning', async () => {
   assert.equal(plan.calls[0].arguments.file_path, '/workspace/.lan-agent-memory/projects/-/memory/MEMORY.md')
 })
 
-test('unknown and interaction tools are refused with actionable text', async () => {
+test('unknown and interaction-only tools are refused with actionable text', async () => {
   const unknown = await interpret('does_not_exist', {}, {})
   assert.equal(unknown.kind, 'refusal')
   assert.ok(unknown.error.message.includes('可用工具'))
 
-  const interaction = await interpret('ask_followup_question', { question: 'x' }, {})
+  // `ask_followup_question` is NOT refused any more (it maps to ask_user_question,
+  // see the test below); the remaining interaction tools have no DSH counterpart.
+  const interaction = await interpret('switch_mode', { mode: 'code' }, {})
   assert.equal(interaction.kind, 'refusal')
   assert.ok(interaction.error.message.includes('交互类'))
+})
+
+test('ask_followup_question maps onto the DSH question tool, and its answer renders', async () => {
+  const plan = await interpret('ask_followup_question', { question: 'Continue?', options: ['Yes', 'No'] }, {})
+  assert.equal(plan.kind, 'dsh')
+  assert.equal(plan.calls.length, 1)
+  assert.equal(plan.calls[0].dshTool, 'ask_user_question')
+  const questions = plan.calls[0].arguments.questions
+  assert.equal(questions.length, 1)
+  assert.equal(questions[0].question, 'Continue?')
+  assert.deepEqual(questions[0].options, [{ label: 'Yes' }, { label: 'No' }])
+
+  const answered = { answers: [{ id: questions[0].id, selected: ['Yes'], custom: 'and then keep going' }] }
+  const answer = { text: JSON.stringify(answered), isError: false }
+  const fromValue = render(plan, new Map([['ask', { ...answer, value: answered }]]), {})
+  const fromText = render(plan, new Map([['ask', answer]]), {})
+  assert.deepEqual(fromText, fromValue, 'the text-only route must render the same answer')
+  assert.match(fromValue.content[0].text, /Continue\?/)
+  assert.match(fromValue.content[0].text, /Yes/)
+  assert.match(fromValue.content[0].text, /and then keep going/)
+
+  // A timed question that ran out of patience is PENDING, not answered: the vendor
+  // model must not be told the user answered something.
+  const pending = render(plan, new Map([['ask', { text: JSON.stringify({ pending: true }), isError: false }]]), {})
+  assert.match(pending.content[0].text, /没有回答/)
+
+  // A skipped question is still a submitted batch.
+  const skipped = render(plan, new Map([['ask', { text: JSON.stringify({ answers: [{ id: questions[0].id, selected: [] }] }), isError: false }]]), {})
+  assert.match(skipped.content[0].text, /跳过/)
+
+  // A failure of the DSH tool is an error, never a pretend answer.
+  const failed = render(plan, new Map([['ask', { text: 'the question UI is unavailable', isError: true }]]), {})
+  assert.match(failed.error.message, /the question UI is unavailable/)
+
+  // No question text means nothing to ask: refused before any DSH call.
+  const empty = await interpret('ask_followup_question', { question: '   ' }, {})
+  assert.equal(empty.kind, 'refusal')
+
+  // The option-free shape the vendor also sends is accepted as-is.
+  const plain = await interpret('ask_followup_question', { question: 'Which branch?' }, {})
+  assert.deepEqual(plain.calls[0].arguments.questions, [{ id: 'vendor-followup', question: 'Which branch?' }])
 })
 
 test('a plan is a plain value: no functions, JSON-serializable, no responder', async () => {

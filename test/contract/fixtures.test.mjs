@@ -19,11 +19,11 @@ const fixtures = JSON.parse(readFileSync(FILE, 'utf8'))
 const cases = fixtures.cases ?? []
 const byId = new Map(cases.map((entry) => [entry.id, entry]))
 
-const DSH_TOOLS = new Set(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'run_code'])
+const DSH_TOOLS = new Set(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'run_code', 'ask_user_question'])
 const VENDOR_TOOLS = new Set([
   'get_environment_info', 'execute_command', 'read_files', 'write_to_file',
   'replace_in_file', 'search_files', 'list_files', 'use_mcp_tool', 'run_code',
-  'ask_followup_question', 'no_such_vendor_tool',
+  'ask_followup_question', 'switch_mode', 'no_such_vendor_tool',
 ])
 const KINDS = new Set(['dsh', 'local', 'refusal'])
 
@@ -128,7 +128,11 @@ test('fixtures: replace_in_file has an exact and a fuzzy case with resolvable do
 
 test('fixtures: local and refusal cases carry their decision evidence', () => {
   assert.equal(byId.get('get_environment_info/local').vendor, 'get_environment_info')
-  assert.ok(byId.get('refusal/ask_followup_question').observed.text.length > 0)
+  // The vendor's interaction question is mapped, not refused: it must become a
+  // real ask_user_question call. The tools that stay refused carry their name.
+  assert.equal(byId.get('ask_followup_question/mapped').calls[0].dshTool, 'ask_user_question')
+  assert.equal(byId.get('refusal/switch_mode').vendor, 'switch_mode')
+  assert.ok(byId.get('refusal/switch_mode').observed.text.length > 0)
   assert.deepEqual(byId.get('refusal/missing-arguments').arguments.paths, [])
 })
 

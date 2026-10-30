@@ -90,10 +90,14 @@ export function programFor(name, args) {
  * @param {Map<string,string>} [options.routes] remembered route per session, so
  *   a PTC session pays the refused attempt only once.
  * @param {string} [options.sessionKey] key into `routes`.
+ * @param {number} [options.programTimeoutMs] the `run_code` wall clock this
+ *   dispatcher asks for. DSH defaults it to 120000 and caps it at 600000, and
+ *   that deadline covers the nested call: without this, any bridged tool that
+ *   legitimately runs past two minutes was killed by the transport.
  * @param {{debug?: Function, warn?: Function}} [options.logger]
  * @returns {(name: string, args: unknown, context: {signal: AbortSignal, callId: string}) => Promise<object>}
  */
-export function createToolDispatcher({ tools, agent, mode = DispatchMode.auto, routes = new Map(), sessionKey = '', logger }) {
+export function createToolDispatcher({ tools, agent, mode = DispatchMode.auto, routes = new Map(), sessionKey = '', logger, programTimeoutMs }) {
   const agentField = agent === undefined ? {} : { agent }
 
   const callDirect = async (name, args, context) => await tools.execute({
@@ -105,10 +109,19 @@ export function createToolDispatcher({ tools, agent, mode = DispatchMode.auto, r
   })
 
   const callThroughProgram = async (name, args, context) => {
+    // DSH clamps this to its own ceiling (600000 by default); asking for the
+    // deployment's budget keeps the transport from killing a long call early.
+    const timeoutMs = Number.isFinite(programTimeoutMs) && programTimeoutMs > 0
+      ? Math.round(programTimeoutMs)
+      : undefined
     const outer = await tools.execute({
       callId: context.callId,
       name: RUN_CODE,
-      arguments: { code: programFor(name, args), description: `lanagent 委派的 ${name} 调用` },
+      arguments: {
+        code: programFor(name, args),
+        description: `lanagent 委派的 ${name} 调用`,
+        ...timeoutMs === undefined ? {} : { timeoutMs },
+      },
       signal: context.signal,
       ...agentField,
     })

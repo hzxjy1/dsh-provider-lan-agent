@@ -14,7 +14,8 @@
  * @module src/audit
  */
 
-import { appendFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 
 /** Default cap: enough for thousands of request lines, small enough to ignore. */
 const DEFAULT_MAX_BYTES = 262_144
@@ -37,6 +38,10 @@ function clip(value, limit) {
 /**
  * Create the audit sink.
  *
+ * The parent directory is created on first write: a deployment that points this
+ * at `<DSH_HOME>/logs/lanagent-audit.jsonl` should get the file, not a one-time
+ * warning and no trace (which is exactly the state this log exists to end).
+ *
  * @param {string} file absolute path of the JSONL audit file.
  * @param {object} [options]
  * @param {number} [options.maxBytes]
@@ -49,6 +54,7 @@ export function createAuditWriter(file, { maxBytes = DEFAULT_MAX_BYTES, maxArgsC
   return (record) => {
     if (failed) return
     try {
+      mkdirSync(dirname(file), { recursive: true })
       let size = 0
       try {
         size = statSync(file).size

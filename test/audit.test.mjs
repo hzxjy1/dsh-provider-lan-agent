@@ -56,9 +56,21 @@ test('truncates in place once the file outgrows its cap', () => {
   assert.equal(text.trim().split('\n').length, 2)
 })
 
+test('a missing parent directory is created: the log is the point', () => {
+  const root = mkdtempSync(join(tmpdir(), 'lanagent-audit-new-'))
+  const file = join(root, 'logs', 'nested', 'audit.jsonl')
+  const audit = createAuditWriter(file)
+  audit({ name: 'turn', args: { session: 's1' }, ok: true, route: 'turn' })
+  assert.match(readFileSync(file, 'utf8'), /"route":"turn"/)
+})
+
 test('an unwritable path warns once and never throws into the turn', () => {
   const warnings = []
-  const audit = createAuditWriter(join(tmpdir(), 'lanagent-audit-missing-dir', 'nested', 'audit.jsonl'), {
+  // A FILE where the parent directory should be: mkdirSync fails with ENOTDIR.
+  const root = mkdtempSync(join(tmpdir(), 'lanagent-audit-blocked-'))
+  const blocker = join(root, 'blocked')
+  writeFileSync(blocker, 'not a directory')
+  const audit = createAuditWriter(join(blocker, 'nested', 'audit.jsonl'), {
     logger: { warn: (message) => warnings.push(message) },
   })
   assert.doesNotThrow(() => audit({ name: 'bash', args: {}, ok: true }))

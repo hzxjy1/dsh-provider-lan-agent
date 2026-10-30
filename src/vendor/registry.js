@@ -37,15 +37,21 @@ import {
 /** The error code the vendor's client uses for a client-side refusal. */
 export const REFUSAL_CODE = -10001
 
-/** Vendor names that are UI interactions in its desktop client; v1 refuses them. */
+/**
+ * Vendor names that are UI interactions in its desktop client and have no DSH
+ * counterpart. `ask_followup_question` is NOT here any more: it maps onto
+ * DSH's own `ask_user_question` (see the entry below).
+ */
 const INTERACTION_TOOLS = new Set([
-  'ask_followup_question',
   'enter_plan_mode',
   'plan_mode_respond',
   'switch_mode',
   'todo_list_snapshot',
   'restore_tool',
 ])
+
+/** The question id a mapped follow-up question carries; DSH echoes it back. */
+const FOLLOWUP_QUESTION_ID = 'vendor-followup'
 
 /** Vendor spellings that mean the same tool. */
 const ALIASES = Object.freeze({ Bash: 'execute_command' })
@@ -105,6 +111,44 @@ function replaceGuidance(reason, nearest) {
     '3. 用更多上下文行来唯一定位。',
     `原始错误：${reason}${nearest === undefined ? '' : `（${nearest}）`}`,
   ].join('\n')
+}
+
+/**
+ * The vendor's `ask_followup_question` options as DSH option items.
+ *
+ * Its client sends plain strings (`options: ["是", "否"]`); an object spelling
+ * with a label is tolerated because that is what a future client version could
+ * send, and guessing wrong here means the user sees options they cannot pick.
+ */
+function askOptions(input) {
+  const raw = Array.isArray(input?.options) ? input.options : []
+  const options = []
+  for (const entry of raw) {
+    const label = (typeof entry === 'string' ? entry : String(entry?.label ?? entry?.value ?? '')).trim()
+    if (label.length === 0) continue
+    const description = typeof entry?.description === 'string' ? entry.description.trim() : ''
+    options.push({ label, ...description.length === 0 ? {} : { description } })
+  }
+  return options
+}
+
+/**
+ * The structured answer of an `ask_user_question` outcome.
+ *
+ * The bridge hands over DSH's `value`; the loop route has only the rendered text,
+ * which `dsh-tool-ask-user` renders as `JSON.stringify(value)`. Parsing keeps the
+ * two routes reading the same answer.
+ */
+function askAnswerValue(call) {
+  if (call?.value !== undefined && call.value !== null && typeof call.value === 'object') return call.value
+  const text = String(call?.text ?? '').trim()
+  if (text.length === 0) return undefined
+  try {
+    const parsed = JSON.parse(text)
+    return parsed !== null && typeof parsed === 'object' ? parsed : undefined
+  } catch {
+    return undefined
+  }
 }
 
 const ENTRIES = {
@@ -332,6 +376,64 @@ const ENTRIES = {
     },
   },
 
+  /**
+   * The vendor client's own "ask the human" tool.
+   *
+   * Its desktop client renders this as an interactive prompt and its model
+   * prefers it over any toolbox equivalent. The first version refused it as an
+   * unsupported interaction tool, with the instruction "ask the user in text
+   * instead" — and a plain-text question is a turn with no tool call, so the
+   * turn ended and the user saw the agent "stop by itself" (measured:
+   * session-988df62d turn 1, whose own reasoning quotes the refusal).
+   *
+   * Mapping it onto DSH's `ask_user_question` makes the question a real tool
+   * call: DSH's UI collects the answer, the answer is this call's result, and
+   * the vendor's model continues in the SAME turn.
+   */
+  ask_followup_question: {
+    plan(input) {
+      const question = String(input?.question ?? input?.text ?? input?.prompt ?? '').trim()
+      if (question.length === 0) return fail('ask_followup_question', 'ask_followup_question: question 参数为空')
+      const options = askOptions(input)
+      return one('ask_followup_question', 'ask', 'ask_user_question', {
+        questions: [{ id: FOLLOWUP_QUESTION_ID, question, ...options.length === 0 ? {} : { options } }],
+      })
+    },
+    render(plan, get) {
+      const call = get('ask')
+      if (failed(call)) return errorAnswer(`向用户提问失败：${String(call?.text ?? '').trim() || 'DSH 没有返回原因'}`)
+      const value = askAnswerValue(call)
+      const asked = Array.isArray(plan.calls[0]?.arguments?.questions) ? plan.calls[0].arguments.questions : []
+      // The timed ask returns `pending` instead of an answer batch: the question
+      // is still on the screen, so the model must not invent an answer.
+      if (value?.pending === true) {
+        return textAnswer('用户还没有回答你的提问（问题仍挂在界面上）。请先继续不依赖这个答案的工作，不要假设答案。')
+      }
+      if (!Array.isArray(value?.answers)) {
+        // Not the structured shape (a renderer change, or the tool answered with
+        // prose): hand the model exactly what DSH said instead of inventing one.
+        const rendered = String(call?.text ?? '').trim()
+        return textAnswer(rendered.length > 0 ? rendered : '用户已回答你的提问。')
+      }
+      const lines = value.answers.map((answer, index) => {
+        const question = asked.find((item) => item?.id === answer?.id)?.question
+          ?? asked[index]?.question
+          ?? `问题 ${index + 1}`
+        const selected = (Array.isArray(answer?.selected) ? answer.selected : []).map(String)
+        const custom = typeof answer?.custom === 'string' ? answer.custom.trim() : ''
+        const choice = selected.length > 0 && custom.length > 0
+          ? `${selected.join('、')}（补充：${custom}）`
+          : selected.length > 0
+            ? selected.join('、')
+            : custom.length > 0
+              ? custom
+              : '（用户跳过了这个问题）'
+        return `${index + 1}. ${question}\n   → ${choice}`
+      })
+      return textAnswer(['用户已回答你的提问：', ...lines].join('\n'))
+    },
+  },
+
   get_environment_info: {
     async plan(_input, ctx) {
       const answer = typeof ctx?.localAnswer === 'function'
@@ -384,7 +486,7 @@ export async function interpret(name, input, ctx = {}) {
   }
   const args = input !== null && typeof input === 'object' ? input : {}
   if (INTERACTION_TOOLS.has(vendor)) {
-    return finish(fail(vendor, `工具 ${vendor} 是厂商的交互类工具，当前 v1 不支持；请直接用文字向用户提问。`))
+    return finish(fail(vendor, `工具 ${vendor} 是厂商客户端的交互类工具，DSH 侧没有对应能力；需要用户决策时请调用 ask_followup_question（会转成 DSH 的真实提问）或工具箱里的 ask_user_question。`))
   }
   const entry = ENTRIES[vendor]
   if (entry === undefined) {
