@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.4.1 — 2026-11-10
+
+### Fixed
+
+- Client version gate: the vendor now rejects the request body built from CLI
+  v1.0.12 — the stream answered one text block "请将vendor CLI更新到最新版本（至少为1.0.16）"
+  and never reached a terminal task status, which surfaced as
+  "the vendor stream ended without a terminal task status" and, intermittently,
+  "task-agent answered HTTP 500". `CLIENT_VERSION` is bumped to `1.0.16`
+  (measured: identical stream shape — block snapshots, `task_status`,
+  `token_quota`, `thinking` — and `think` still accepts `yes`/`no`).
+- The catalog endpoints joined the authenticated surface: a bare
+  `GET /chatbot/v3/model_groups` now answers code `-106` "token不存在，请登录"
+  under HTTP 200, so the catalog silently fell back to the static list forever.
+  The catalog now fetches through an authenticated wrapper that resolves a JWT
+  via the same `LanAgentAuth` the turns use; auth failures still degrade to the
+  static fallback.
+
 ## 1.4.0 — 2026-10-30
 
 ### Added

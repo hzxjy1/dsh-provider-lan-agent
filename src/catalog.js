@@ -2,7 +2,9 @@
  * Model catalog for the lanagent route.
  *
  * Source of truth for WHICH models exist is the vendor's own group listing
- * (`GET /chatbot/v3/model_groups`, no authentication required). Source of truth
+ * (`GET /chatbot/v3/model_groups`; since 2026-11-10 it requires the JWT as a
+ * bare `Authorization` header — an unauthenticated call is answered with
+ * code `-106` "token不存在，请登录" and HTTP 200). Source of truth
  * for their CAPABILITIES is `GET /chatbot/v3/models`, whose 25 definitions are
  * not 1:1 with the six selectable groups — the groups carry only a `group`
  * name, while the definitions are keyed by `model_id`/`name` (for example the

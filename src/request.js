@@ -26,9 +26,14 @@ const IMAGE_NOTE = '[图片已省略：lanagent 路由当前只支持文本输�
 /** Long tool payloads are folded, not reproduced; the model only needs the gist. */
 const FOLD_LIMIT = 2000
 
-/** Proven-good client identity, copied from vendor CLI v1.0.12. */
+/**
+ * Proven-good client identity, copied from vendor CLI. The server gates on
+ * this value (measured 2026-11-10: v1.0.12 is answered with a text-only block
+ * "请将vendor CLI更新到最新版本（至少为1.0.16）" and the turn never reaches a
+ * terminal task status; v1.0.16 works, stream shape unchanged).
+ */
 export const CLIENT_ID = 'CLI'
-export const CLIENT_VERSION = '1.0.12'
+export const CLIENT_VERSION = '1.0.16'
 /** The action that makes the vendor's server treat the message as a real prompt. */
 export const ACTION_FREE_QUESTION = '自由提问'
 

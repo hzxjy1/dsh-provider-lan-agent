@@ -1123,7 +1123,24 @@ export function apply(ctx, config) {
     logger,
   })
 
-  const catalog = new LanAgentCatalog({ baseURL, ttlMs: catalogTtlMs, logger })
+  /**
+   * The vendor's catalog endpoints joined the authenticated surface on
+   * 2026-11-10 (measured: a bare GET is answered with code -106
+   * "token不存在，请登录" under HTTP 200, which the old unauthenticated fetch
+   * turned into the static fallback forever). The fetch wrapper resolves a JWT
+   * per call through the same auth object the turns use, so a rotated token
+   * reaches the next catalog refresh without a restart. Failures (including a
+   * missing credential) still degrade to the static fallback inside the catalog.
+   */
+  const catalog = new LanAgentCatalog({
+    baseURL,
+    ttlMs: catalogTtlMs,
+    logger,
+    fetchImpl: async (url, init = {}) => {
+      const token = await auth.token(init.signal)
+      return await fetch(url, { ...init, headers: { ...(init.headers ?? {}), Authorization: token } })
+    },
+  })
 
   /**
    * Skill metadata for the vendor's `skills` channel. It carries names and
