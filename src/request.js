@@ -206,6 +206,28 @@ export function buildRules({ system, systemParts = [], systemPromptMode = 'rules
     })
     const body = [system ?? '', ...systemParts].filter((part) => typeof part === 'string' && part.trim().length > 0).join('\n\n')
     if (body.length > 0) rules.push({ source: 'project', content: body })
+    // A continuable subagent's DSH prompt ends with "Your parent agent id is
+    // <id> … send your result … with send_message({agent_id})". On THIS route
+    // that name is the vendor's OWN SendMessage, which addresses vendor *tasks*
+    // (it answers "Task <id> not found"), and the vendor executes it itself:
+    // the call never reaches the bridge and the child concludes it cannot
+    // report (measured 2026-11-11: sessions 45ece381, 5192771e, ba9f5027).
+    // Name the route that works, and say that finishing also delivers.
+    const parentId = /Your parent agent id is "([^"]+)"/.exec(body)?.[1]
+    if (parentId !== undefined) {
+      rules.push({
+        source: 'user',
+        content: [
+          '关于把结果交回父代理（本条优先于上面 DSH 提示里的 send_message 指引）：',
+          '- 你自带的 SendMessage / send_message 是**厂商任务**工具，参数是厂商任务 id，不是 DSH 代理 id；',
+          `  用它给父代理 ${parentId} 发消息会得到 "Task ... not found"，消息不会送达，不要用它。`,
+          `- 正确方式：use_mcp_tool，server_name="${toolboxName}", tool_name="send_message", arguments={"agent_id":"${parentId}","message":"..."}。`,
+          '  这条走 DSH 自己的代理消息通道，父代理会立刻收到。',
+          '- 也可以不调用任何工具：直接把完整结果作为本回合的最后正文结束回合，DSH 会把这段收尾消息作为结算通知交给父代理。',
+          '- 两种方式都可以；如果 send_message 返回失败（例如父代理已不在运行），仍以本回合的收尾正文为准。',
+        ].join('\n'),
+      })
+    }
   }
   if (purposePolicy === 'light' && (purpose === 'session-title' || purpose === 'compaction')) {
     // Session titles and compaction summaries are internal calls. Without this

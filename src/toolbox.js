@@ -61,6 +61,10 @@ export const DEFAULT_WHITELIST = Object.freeze([
   'subagent',
   'subagent_fork',
   'todo_write',
+  // The agent-to-agent message channel. Without a bridge route the child's own
+  // return instruction is unreachable: the vendor's SendMessage addresses its
+  // own tasks and answers `Task <id> not found` (measured 2026-11-11).
+  'send_message',
 ])
 
 /** Names never published, whatever the whitelist says. */

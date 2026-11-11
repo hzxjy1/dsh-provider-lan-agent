@@ -290,5 +290,10 @@ export const PASSTHROUGH_TOOL_NAMES = Object.freeze(new Set([
   // one — it ends up searching the disk with shell commands instead.
   'skill', 'web_fetch', 'web_search',
   'ask_user_question', 'subagent', 'subagent_fork', 'job_list', 'job_output', 'job_kill',
+  // A continuable child's DSH prompt tells it to return its result with
+  // `send_message({agent_id})`. The name must reach DSH when the vendor sends it
+  // to the bridge, or the child has no way to report (see the rules note in
+  // src/request.js for the vendor's own SendMessage shadowing it).
+  'send_message', 'interrupt_agent', 'list_agents',
   'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
 ]))

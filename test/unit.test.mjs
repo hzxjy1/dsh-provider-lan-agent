@@ -854,6 +854,23 @@ test('M1 tool handler: refuses with the tool name and stays actionable', async (
   assert.equal(answer.content, undefined)
 })
 
+test('a continuable child is steered off the vendor SendMessage onto the bridge', () => {
+  // The vendor's own SendMessage addresses vendor tasks: a child that follows
+  // DSH's "send_message({agent_id})" guidance verbatim gets "Task <id> not
+  // found" and reports that it cannot reach its parent (measured 2026-11-11).
+  const system = 'Your parent agent id is "session-abc". Before you finish, send your result to that agent with send_message({ agent_id: "session-abc", message: "<self-contained result>" }).'
+  const rules = buildRules({ system, toolboxName: 'dsh_toolbox' })
+  const note = rules.at(-1)
+  assert.equal(note.source, 'user')
+  assert.match(note.content, /Task \.\.\. not found/)
+  assert.match(note.content, /server_name="dsh_toolbox", tool_name="send_message"/)
+  assert.match(note.content, /"agent_id":"session-abc"/)
+  assert.match(note.content, /收尾消息作为结算通知/)
+
+  // A top-level session (no parent guidance) gets no delivery note at all.
+  assert.equal(buildRules({ system: 'SYS' }).length, 2)
+})
+
 test('the bridge note tells the vendor to load skills through the toolbox', () => {
   // The catalog DSH injects carries names and descriptions but no paths, and the
   // relative resource base only resolves through the skill tool — so the note has

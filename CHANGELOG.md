@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.4.2 — 2026-11-11
+
+### Fixed
+
+- A continuable child could not hand its result back to its parent. DSH's child
+  guidance says `send_message({agent_id})`, but on this route that name is the
+  vendor's OWN `SendMessage`, which addresses vendor *tasks*: the vendor runs it
+  itself, answers `Task <agent-id> not found`, and the bridge never sees the
+  call — so the child reported "向父会话 send_message 失败" and gave up
+  (measured on children 45ece381 / 5192771e and probe ba9f5027). Three changes
+  make the return channel real:
+  - `send_message` is published in the DSH toolbox (row `mcpToolWhitelist` and
+    `DEFAULT_WHITELIST`), so
+    `use_mcp_tool(server_name="dsh_toolbox", tool_name="send_message", …)`
+    reaches DSH over the bridge. The vendor's model does have `use_mcp_tool`
+    even though it does not list it in its own tool recap.
+  - `send_message`, `interrupt_agent` and `list_agents` are passthrough
+    names, so a bare DSH spelling is routed instead of refused with
+    "该名字既不是厂商内置工具".
+  - `buildRules` appends a delivery note whenever the DSH prompt carries "Your
+    parent agent id is …": it names the working route, says the vendor
+    `SendMessage` returns `Task … not found`, and says that ending the turn
+    with the full result also delivers (the settlement notice).
+
+  Verified end-to-end on a second Web instance: the child's
+  `use_mcp_tool → send_message` returned a messageId and the parent's session
+  received "Agent <child-id> sent a message".
+
 ## 1.4.1 — 2026-11-10
 
 ### Fixed

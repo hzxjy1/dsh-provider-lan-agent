@@ -205,6 +205,16 @@ test('DSH passthrough names keep their arguments and rendering', async () => {
   assert.equal(answerText(answer), '/workspace')
 })
 
+test('send_message is a bridge name, so a child can reach its parent', async () => {
+  const plan = await interpret('send_message', { agent_id: 'session-abc', message: 'done' }, {})
+  assert.equal(plan.kind, 'dsh')
+  assert.equal(plan.passthrough, true)
+  assert.equal(plan.calls[0].dshTool, 'send_message')
+  assert.deepEqual(plan.calls[0].arguments, { agent_id: 'session-abc', message: 'done' })
+  const answer = render(plan, new Map([['passthrough', { text: 'message delivered to agent session-abc', isError: false }]]), {})
+  assert.equal(answerText(answer), 'message delivered to agent session-abc')
+})
+
 test('mapping happens during interpretation, before planning', async () => {
   const plan = await interpret('read_files', { paths: [`${VENDOR_MEMORY_ROOT}/projects/-/memory/MEMORY.md`] }, {
     cwd: '/workspace',
