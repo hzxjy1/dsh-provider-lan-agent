@@ -42,6 +42,7 @@ import {
 } from './src/authSettings.js'
 import { LanAgentCatalog, INPUT_MODALITIES } from './src/catalog.js'
 import { LanAgentError, FailureCode, isVendorTaskBusy } from './src/errors.js'
+import { deploymentValue } from './src/deployment.js'
 import { buildRules, buildTaskAgentBody, projectConversation } from './src/request.js'
 import { createJsonStreamParser, createStreamMapper } from './src/stream.js'
 import { createAuditWriter } from './src/audit.js'
@@ -132,6 +133,18 @@ const CLI_STATUS_ROUTE = '/lanagent/cli'
 const AUTH_STATUS_ROUTE = '/lanagent/auth'
 const AUTH_LOGIN_ROUTE = '/lanagent/auth/login'
 const AUTH_LOGOUT_ROUTE = '/lanagent/auth/logout'
+/**
+ * Default origin: the LAN agent service.
+ *
+ * A 10/8 address is deliberately kept in source: it is not routable from the
+ * public internet, and the route is useless without it. What must NOT be here
+ * is deployment *identity* — corporate domains, staff accounts, and token
+ * paths; those come from `src/deployment.js`.
+ *
+ * A deployment on another network overrides this with `baseURL`, with
+ * `LAN_AGENT_BASE_URL`, or with the `baseURL` key in
+ * `$DSH_HOME/lan-agent.deployment.json`.
+ */
 const DEFAULT_BASE_URL = 'http://10.219.9.56'
 
 /**
@@ -159,7 +172,7 @@ const DEFAULT_PATH_MAPPINGS = Object.freeze([{ from: VENDOR_MEMORY_ROOT, to: '.l
 function buildConfig(z) {
   return z.object({
     route: z.string().default(DEFAULT_ROUTE).description('Provider route name requests select.'),
-    baseURL: z.string().default(DEFAULT_BASE_URL).description('Vendor origin; beta is http://10.219.9.56.'),
+    baseURL: z.string().default(DEFAULT_BASE_URL).description('Vendor origin; defaults to the LAN service (10.219.9.56). Override per deployment via LAN_AGENT_BASE_URL or $DSH_HOME/lan-agent.deployment.json.'),
     user: z.string().default('').description('Optional plain-config account name. Prefer auth.userRef, which keeps the account out of deployment files; this field is only a fallback.'),
     auth: z.object({
       mode: z.union([z.const('login'), z.const('token')]).default('login')
@@ -249,7 +262,10 @@ const THINK_OFF = new Set(['', 'off', 'none', 'no', 'disabled', 'minimal'])
 class LanAgentAdapter {
   constructor({ route, baseURL, user, auth, catalog, logger, systemPromptMode, thinkMode, purposePolicy, toolChannel, toolTimeoutMs, approvalTimeoutMs, requestTimeoutMs, collectSkills, collectToolbox, createToolHandler, loopRoute, loopMode, loopCallStyle, loopBudgetMs, toolboxName, audit, resolveCwd, resolveTool, availableTools, measurePressure }) {
     this.route = route
-    this.baseURL = baseURL.replace(/\/+$/, '')
+    this.baseURL = String(baseURL ?? '').replace(/\/+$/, '')
+    if (this.baseURL.length === 0) {
+      logger?.warn?.('lanagent: no origin configured; set LAN_AGENT_BASE_URL or the baseURL key in $DSH_HOME/lan-agent.deployment.json — requests fail until then')
+    }
     this.user = user
     this.auth = auth
     this.catalog = catalog
@@ -846,6 +862,11 @@ class LanAgentAdapter {
   #createPump({ body, controller, onToolUse, localUsage, onTerminal }, holder) {
     const logger = this.logger
     const run = async function* run() {
+      if (this.baseURL.length === 0) {
+        throw new LanAgentError('lanagent: no origin configured; set LAN_AGENT_BASE_URL or the baseURL key in $DSH_HOME/lan-agent.deployment.json', {
+          code: FailureCode.badRequest,
+        })
+      }
       const response = await fetch(`${this.baseURL}/chatbot/v3/task-agent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: body.token },
@@ -968,7 +989,9 @@ class LanAgentAdapter {
 export function apply(ctx, config) {
   const logger = ctx.logger ?? console
   const route = String(configValue(config, 'route', DEFAULT_ROUTE))
-  const baseURL = String(configValue(config, 'baseURL', DEFAULT_BASE_URL))
+  // An empty row value is deliberate: the deployment supplies the origin out of
+  // band, and the source stays free of any one network's address.
+  const baseURL = String(configValue(config, 'baseURL', DEFAULT_BASE_URL)).trim() || deploymentValue('baseURL')
   const user = String(configValue(config, 'user', ''))
   const authConfig = configValue(config, 'auth', {})
   const authMode = configValue(authConfig, 'mode', 'login')

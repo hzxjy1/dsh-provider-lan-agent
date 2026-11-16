@@ -116,7 +116,7 @@
       "arguments": {
         "paths": [
           "/home/user/.dsh/fuzzy-probe.txt",
-          "/home/user/.dsh/lan-agent-memory/projects/-/memory/26f4d39fdf5f334d/session_notes.md"
+          "/home/user/.dsh/lan-agent-memory/projects/-/memory/sessionhash000001/session_notes.md"
         ]
       },
       "calls": [
@@ -149,7 +149,7 @@
           "key": "read:1",
           "dshTool": "read",
           "isError": true,
-          "text": "Error: cannot read \"/home/user/.dsh/lan-agent-memory/projects/-/memory/26f4d39fdf5f334d/session_notes.md\": not found"
+          "text": "Error: cannot read \"/home/user/.dsh/lan-agent-memory/projects/-/memory/sessionhash000001/session_notes.md\": not found"
         }
       ],
       "note": "One success, one failure: the canonical answer keeps both, with a per-path failure string."
@@ -161,8 +161,8 @@
       "cwd": "/workspace",
       "arguments": {
         "paths": [
-          "/home/user/.dsh/lan-agent-memory/projects/-/memory/26f4d39fdf5f334d/session_notes.md",
-          "/home/user/.dsh/lan-agent-memory/projects/-/memory/8549f69c693ae3b0/session_notes.md"
+          "/home/user/.dsh/lan-agent-memory/projects/-/memory/sessionhash000001/session_notes.md",
+          "/home/user/.dsh/lan-agent-memory/projects/-/memory/sessionhash000002/session_notes.md"
         ]
       },
       "calls": [
@@ -170,13 +170,13 @@
           "key": "read:0",
           "dshTool": "read",
           "isError": true,
-          "text": "Error: cannot read \"/home/user/.dsh/lan-agent-memory/projects/-/memory/26f4d39fdf5f334d/session_notes.md\": not found"
+          "text": "Error: cannot read \"/home/user/.dsh/lan-agent-memory/projects/-/memory/sessionhash000001/session_notes.md\": not found"
         },
         {
           "key": "read:1",
           "dshTool": "read",
           "isError": true,
-          "text": "Error: cannot read \"/home/user/.dsh/lan-agent-memory/projects/-/memory/8549f69c693ae3b0/session_notes.md\": not found"
+          "text": "Error: cannot read \"/home/user/.dsh/lan-agent-memory/projects/-/memory/sessionhash000002/session_notes.md\": not found"
         }
       ],
       "note": "Every path failed: the canonical answer is a top-level error envelope."

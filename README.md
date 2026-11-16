@@ -1,6 +1,8 @@
 # @local/dsh-provider-lan-agent
 
 把局域网内的 agent 服务（`http://10.219.9.56`）接成 DSH 的一个原生 LLM provider 路由 `lanagent`。
+10/8 地址不对外路由，且没有它这个路由不可用，所以 origin 默认值留在源码里；
+厂商域名 / 账号 / token 路径才是部署身份，不写进源码（见下文“部署值”）。
 
 架构与厂商请求 seam 见 [ARCHITECTURE.md](./ARCHITECTURE.md)；离线契约测试见 [test/contract/](./test/contract/)。
 
@@ -46,12 +48,28 @@ WS    /ws-api/coagent/<session_id>  → 服务端的工具调用，在本进程�
 **验收证据**：`node --test` **283 项全绿**（协议/认证/目录/工具翻译/派发/审计/设置页账号登录 + 20 个契约 fixture 的契约测试）；
 真实服务验证脚本保留在本地，不随仓库发布；
 GUI 模型选择器出现 `LAN Agent` 与 6 个模型；**真实 GUI 会话端到端跑通**
-（厂商 agent 调 `execute_command` → 桥 → DSH 真跑 `pwd && ls api-reference.md && date +%s` → 输出正确，
+（厂商 agent 调 `execute_command` → 桥 → DSH 真跑 `pwd && date +%s` → 输出正确，
 会话日志留有 `tool/ptc-dispatch-start` 证据）。
 
 ## 配置
 
 `cordis.patch.yml` 里的 `llm-lan-agent` 行；字段含义见 `index.js` 的 `Config` 与 ARCHITECTURE.md。要点：
+
+### 部署值：账号 / token 路径（origin 用 LAN IP）
+
+**两个 origin 的默认值都在源码里，且都写 10/8 的 LAN IP `10.219.9.56`——厂商自己的域名解析到的就是这台机器，所以源码不需要出现域名。**
+**账号与 token 路径才是部署身份，不写进源码。** 运行时按顺序解析（`src/deployment.js`）：
+
+1. 行配置里显式写的值（最高优先级）；
+2. 环境变量 `LAN_AGENT_BASE_URL`、`LAN_AGENT_SERVER_URL`、`LAN_AGENT_USERNAME`、`LAN_AGENT_TOKEN_FILE`；
+3. `$DSH_HOME/lan-agent.deployment.json`（mode 600，不入库）：
+
+```json
+{ "baseURL": "<可选：另一网段 origin>", "serverUrl": "<可选：CLI origin>", "username": "<CLI 账号>" }
+```
+
+`username` 缺失时 CLI 能力不会用空值覆盖已有登录态；origin 缺失时回落到源码里的 LAN 默认值，
+两者都为空时插件**照常挂载**（设置页仍要能渲染），请求以 `no origin configured` 失败。
 
 - `auth.mode: login`（默认）：用 `auth.passwordRef` 指向的凭据换 JWT。
 - `auth.mode: token`（逃生开关）：直接读已有 JWT，完全不登录。
@@ -292,26 +310,28 @@ dsh 自己的解析锚点解析；离线跑 `node --test` 不受影响（那套�
 ## 可选的厂商 CLI 子代理能力（1.5.0）
 
 同一个包的**第二个 host 入口** `@local/dsh-provider-lan-agent/subagent`（row id
-`subagent-\u0063odechat`），加上上游 `@deepseek-ai/dsh-tool-subagent` 那一行（row id
-`tool-subagent-\u0063odechat`），把厂商 CLI 接成一次性无人值守子代理，工具名
-`subagent_\u0063odechat`。
+`subagent-vendor-cli`），加上上游 `@deepseek-ai/dsh-tool-subagent` 那一行（row id
+`tool-subagent-vendor-cli`），把厂商 CLI 接成一次性无人值守子代理。
+
+工具名、provider 路由名与凭据引用名都由 `src/vendorName.js` 在运行时拼出，源码不写厂商拼写；
+它们同时是**运行时契约**（模型侧工具名、已装部署的凭据库键名），所以值保持不变。
 
 **两条通道**
 
 | 调用方 | 形态 |
 |---|---|
-| DSH 自己的 agent（含 PTC 会话里的 `tools.subagent_\u0063odechat`） | 异步：立刻返回 `started subagent <id>`，答案由结算通知在**下一轮**送达父会话 |
-| 厂商模型（本 route 的 `use_mcp_tool(server_name="dsh_toolbox", tool_name="subagent_\u0063odechat")`） | 同上，另有 `buildRules` 里一段委派说明解释这个异步契约 |
+| DSH 自己的 agent（含 PTC 会话里的委派工具） | 异步：立刻返回 `started subagent <id>`，答案由结算通知在**下一轮**送达父会话 |
+| 厂商模型（本 route 的 `use_mcp_tool(server_name="dsh_toolbox", tool_name=<委派工具名>)`） | 同上，另有 `buildRules` 里一段委派说明解释这个异步契约 |
 
 **CLI 由运维提供，本包不下载、不给来源**
 
 - 二进制放在 row 的 `binaryPath`（默认 `<包目录>/bin/<cli 名>`），隔离 HOME 为 `homeDir`（默认 `<包目录>/home`）。
-- **文件在 → 能力在；文件不在 → 能力彻底不存在**：provider 不注册，`subagent_\u0063odechat` 工具对
+- **文件在 → 能力在；文件不在 → 能力彻底不存在**：provider 不注册，委派工具对
   DSH agent 与厂商模型同时不可见（厂商工具箱里那条白名单自然解析不到），不会暴露一个永远失败的工具。
 - 可用性由 `fs.watch`（盯目录，不是文件）+ 挂载初检 + 15s 兜底轮询维持，**装/删都不需要重启**。
 - CLI 缺失时，设置页 **General 分区顶部**出现黄色横幅，写明期望路径；`GET /lanagent/cli` 提供状态。
 
-**配置字段**（`subagent-\u0063odechat` 行）：`binaryPath`、`homeDir`、`model`（必填语义：无 `--model` 时后端永不产出）、
+**配置字段**（`subagent-vendor-cli` 行）：`binaryPath`、`homeDir`、`model`（必填语义：无 `--model` 时后端永不产出）、
 `mode`、`fullDelegation`/`permissionMode`、`allowedTools`、`maxBudgetUsd`、`timeoutMs`、`graceMs`、
 `cwd`、`tokenFile`、`credentialsRef`。凭据优先级：`credentialsRef`（DSH 凭据库）→ `tokenFile`。
 

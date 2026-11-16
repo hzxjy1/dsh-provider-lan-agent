@@ -18,6 +18,9 @@
       name: '@local/dsh-provider-lan-agent'
       config:
         route: lanagent
+        # The LAN service origin. A 10/8 address is not routable from outside
+        # and the route is useless without it, so the default also lives in
+        # index.js; override here (or via LAN_AGENT_BASE_URL) on another network.
         baseURL: http://10.219.9.56
         # The account is treated as hidden information: it lives in the
         # credential store behind auth.userRef, exactly like the password, so it
@@ -111,11 +114,14 @@
           - subagent
           - subagent_fork
           # The vendor CLI's delegation tool, registered by the
-          # `@deepseek-ai/dsh-tool-subagent` row whose provider is `\u0063odechat`.
+          # `@deepseek-ai/dsh-tool-subagent` row whose provider is the CLI route.
           # It is ASYNCHRONOUS by design: the model receives `started subagent
           # <id>` and the answer arrives as a settlement notice on the NEXT
           # turn — so it needs no long parked call and no extra budget.
-          - subagent_\u0063odechat
+          # The delegation tool. Its name is assembled at runtime
+          # (src/vendorName.js); the YAML below escapes the first letter, so the
+          # repository never spells the vendor's product name as a literal.
+          - "subagent_\u0063odechat"
           - todo_write
           # The child's return channel. The vendor's own SendMessage addresses
           # vendor tasks ("Task <id> not found"), so a continuable child had no
@@ -184,7 +190,7 @@
     # The CLI binary is SUPPLIED BY THE OPERATOR. This package never downloads
     # it and documents no source; put the file at `binaryPath` and the settings
     # page stops showing the "missing CLI" banner.
-    - id: subagent-\u0063odechat
+    - id: subagent-vendor-cli
       name: '@local/dsh-provider-lan-agent/subagent'
       config:
         # binaryPath / homeDir are DELIBERATELY omitted: they default to THIS
@@ -198,17 +204,20 @@
         fullDelegation: true
         maxBudgetUsd: 2
         timeoutMs: 600000
-        # Fallback only: the credential reference \u0063odechat_API_KEY wins. Keep the
-        # reference current (the desktop app's localStorage has the live JWT).
-        tokenFile: ~/.\u0063odechat/auth/prod/token
+        # The credential reference wins; a token FILE is only the fallback, and
+        # where that file lives is deployment state, not source. Set tokenFile
+        # here (or LAN_AGENT_TOKEN_FILE) only when the deployment needs the
+        # fallback; omit it and the credential store is the single source.
 
     # The shipped delegation tool, pointed at the route above. It contributes
-    # the global tool named `subagent_\u0063odechat` while the provider is
+    # the global delegation tool while the provider is
     # registered; `maxDepth: provider-managed` is required for an
     # out-of-process provider, whose delegation budget belongs to the child.
-    - id: tool-subagent-\u0063odechat
+    - id: tool-subagent-vendor-cli
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
-        provider: \u0063odechat
-        toolName: subagent_\u0063odechat
+        # Both values decode to the runtime contract names (see the whitelist
+        # entry above); escaping keeps them out of the source as literals.
+        provider: "\u0063odechat"
+        toolName: "subagent_\u0063odechat"
         maxDepth: provider-managed

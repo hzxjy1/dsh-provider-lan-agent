@@ -23,7 +23,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 
-import { CLI_HOME_DIRNAME, CLI_LOG_ENV } from '../vendorName.js'
+import { CLI_HOME_DIRNAME, CLI_LOG_ENV, PLUGIN_NAME } from '../vendorName.js'
 
 /** In-memory cap for the answer; it is a final report, not a transcript. */
 export const STDOUT_MAX_BYTES = 1 << 20
@@ -130,6 +130,13 @@ export async function resolveToken(ctx, config) {
  * @param {object} config resolved configuration.
  */
 export async function seedAuth(ctx, config) {
+  if (config.serverUrl.length === 0 || config.username.length === 0) {
+    // No deployment-supplied origin/account. Leave the CLI's own login state
+    // exactly as it is: writing blanks would erase a working config, and the
+    // package itself never knows the right values.
+    ctx.logger?.warn?.(`${PLUGIN_NAME}: no serverUrl/username from the deployment; leaving the CLI login state untouched (set LAN_AGENT_SERVER_URL / LAN_AGENT_USERNAME or $DSH_HOME/lan-agent.deployment.json)`)
+    return
+  }
   const token = await resolveToken(ctx, config)
   if (token === undefined) return
   const authDir = join(config.homeDir, CLI_HOME_DIRNAME, 'CLI')

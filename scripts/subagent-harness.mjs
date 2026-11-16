@@ -17,7 +17,9 @@
  *
  * NOTE: section 2 and later run a REAL delegation against the vendor backend.
  * A live token must be reachable — the harness context exposes no credentials
- * seam, so the token file is the only source it can use.
+ * seam, so a token file is the only source it can use. Point
+ * `LAN_AGENT_TOKEN_FILE` at it; the harness deliberately bakes in no path,
+ * because a token path names one operator's machine.
  */
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,18 +27,18 @@ import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import SubprocessLocal from '@deepseek-ai/dsh-subprocess-local'
 import * as plugin from '../subagent.js'
-import { CLI_BASENAME, CLI_HOME_DIRNAME, PROVIDER } from '../src/vendorName.js'
+import { CLI_BASENAME, PROVIDER } from '../src/vendorName.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_DIR = join(HERE, '..')
 const CLI_BIN = join(PLUGIN_DIR, 'bin', CLI_BASENAME)
-const TOKEN_FILE = join('~', CLI_HOME_DIRNAME, 'auth', 'prod', 'token')
+const TOKEN_FILE = process.env.LAN_AGENT_TOKEN_FILE
 
 const baseConfig = {
   binaryPath: CLI_BIN,
   homeDir: join(PLUGIN_DIR, 'home'),
   model: 'deepseek-v4.1-flash',
-  tokenFile: TOKEN_FILE,
+  ...(TOKEN_FILE === undefined || TOKEN_FILE.length === 0 ? {} : { tokenFile: TOKEN_FILE }),
   timeoutMs: 180_000,
 }
 

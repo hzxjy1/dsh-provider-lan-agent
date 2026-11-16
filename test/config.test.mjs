@@ -32,11 +32,29 @@ import { SUBAGENT_TOOL_NAME } from '../src/vendorName.js'
 
 const text = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 
+/**
+ * Decode the escapes this row uses inside a double-quoted scalar.
+ *
+ * The two runtime names are written as \uXXXX escapes so the file never spells
+ * the vendor's product name (see src/vendorName.js). A reader that compares the
+ * RAW text would see the escape and wrongly report a mismatch, so every
+ * comparison below goes through this decoder — which is exactly what a YAML
+ * parser does.
+ *
+ * @param {string} raw the matched scalar, quotes included when double-quoted.
+ * @returns {string}
+ */
+function decodeScalar(raw) {
+  const quoted = raw.match(/^"([\s\S]*)"$/)
+  if (quoted === null) return raw
+  return quoted[1].replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
+}
+
 /** The last value of a flat scalar key (the row is the only definition point). */
 function scalar(key) {
   const matches = [...text.matchAll(new RegExp(`^\\s*${key}:\\s*(\\S+)\\s*$`, 'gm'))]
   assert.ok(matches.length > 0, `cordis.patch.yml has no ${key}`)
-  return matches.at(-1)[1]
+  return decodeScalar(matches.at(-1)[1])
 }
 
 test('shipped row: the loop budget never preempts the vendor declared timeout', () => {
@@ -74,11 +92,9 @@ test('shipped row: the CLI row carries no machine-specific path', () => {
   assert.doesNotMatch(text, /^\s*binaryPath:\s/m, 'binaryPath must stay omitted (package-relative default)')
   assert.doesNotMatch(text, /^\s*homeDir:\s/m, 'homeDir must stay omitted (package-relative default)')
   // The ASSEMBLED name, never a literal: the same rule the source follows.
-  assert.match(
-    text,
-    new RegExp(`^\\s*toolName:\\s*${SUBAGENT_TOOL_NAME}\\s*$`, 'm'),
-    'the delegation tool must stay published under its row',
-  )
+  // The value is compared AFTER unescaping, so the YAML may (and does) carry it
+  // as an escape sequence without this test going blind.
+  assert.equal(scalar('toolName'), SUBAGENT_TOOL_NAME, 'the delegation tool must stay published under its row')
 })
 
 test('shipped row: the question tool is reachable through the vendor toolbox', () => {

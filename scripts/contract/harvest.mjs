@@ -72,6 +72,9 @@ export function sanitize(value) {
       .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '10.0.0.1')
       .replace(/session-[0-9a-f]{8}-[0-9a-f-]{20,}/g, 'session-…')
       .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g, 'session-…')
+      // A per-session memory directory is 16 hex chars. It still identifies a
+      // real session after every UUID and path around it has been masked.
+      .replace(/\b[0-9a-f]{16}\b/g, 'sessionhash000000')
       .replace(new RegExp('ai' + 'plus', 'gi'), 'lanagent')
       .replace(new RegExp('code' + 'chat', 'gi'), 'vendoragent')
       .replace(new RegExp('desay' + 'sv', 'gi'), 'vendor')

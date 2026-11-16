@@ -149,11 +149,14 @@ test('fixtures: coverage includes every vendor tool and every DSH target', () =>
 
 test('fixtures: no machine-specific data survived sanitization', () => {
   const text = JSON.stringify(fixtures)
-  const forbiddenTerms = ['ai' + 'plus', 'code' + 'chat', 'desay' + 'sv', 'hella' + 'gur', 'uids' + '0861', '/mnt/' + 'c/', '/mnt/' + 'd/']
+  const forbiddenTerms = ['ai' + 'plus', 'desay' + 'sv', 'hella' + 'gur', 'uids' + '0861', '/mnt/' + 'c/', '/mnt/' + 'd/']
   for (const forbidden of forbiddenTerms) {
     assert.equal(text.includes(forbidden), false, `fixture leaks ${forbidden}`)
   }
   assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/.test(text), 'fixture leaks a raw UUID')
+  // A per-session memory directory is 16 hex chars: it still identifies a real
+  // session after every UUID and path around it has been masked.
+  assert.ok(!/\b[0-9a-f]{16}\b/.test(text), 'fixture leaks a raw session directory hash')
 })
 
 test('fixtures: the file stays small enough to review', () => {

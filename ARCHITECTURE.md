@@ -188,10 +188,10 @@ route.
 
 ## The optional CLI subagent entry
 
-The package exposes a SECOND host entry, `./subagent` (row `subagent-\u0063odechat`),
+The package exposes a SECOND host entry, `./subagent` (row `subagent-vendor-cli`),
 beside the model route. It registers a `ctx.subagents` provider for the
 vendor's CLI and is paired with the shipped `@deepseek-ai/dsh-tool-subagent`
-row (row `tool-subagent-\u0063odechat`, `maxDepth: provider-managed`), which
+row (row `tool-subagent-vendor-cli`, `maxDepth: provider-managed`), which
 contributes the model-facing tool.
 
 Two properties shape the code:

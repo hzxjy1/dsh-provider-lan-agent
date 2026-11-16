@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- **The package no longer carries deployment identity.** The factory config and
+  the source used to ship a vendor origin, an employee account, and one
+  operator's Windows token path. Those three are deployment state: the source
+  now resolves them at runtime through `src/deployment.js` —
+  `LAN_AGENT_SERVER_URL` / `LAN_AGENT_USERNAME` / `LAN_AGENT_TOKEN_FILE`, or
+  `$DSH_HOME/lan-agent.deployment.json` (mode 600, outside this package).
+  Both origins default in source to the LAN address `10.219.9.56`, which is
+  what the vendor's own host name resolves to: a 10/8 address is not routable
+  from the public internet, and the service is unreachable without it. The
+  name therefore never appears in source, and either origin stays overridable
+  (`baseURL` / `serverUrl`, `LAN_AGENT_*`, deployment file). An empty origin no
+  longer blocks mounting; the request path reports `no origin configured`.
+- **Factory config carries no token path.** `tokenFile` is omitted; the
+  credential reference is the single source, and a file is opt-in per
+  deployment. `seedAuth` refuses to overwrite the CLI's login state with blank
+  origin/account values.
+- **Row ids renamed** to `subagent-vendor-cli` / `tool-subagent-vendor-cli`.
+  The runtime contract names (delegation tool, provider route, credential
+  reference, CLI HOME) are deliberately unchanged so existing sessions,
+  credentials, and installed CLIs keep working. They are assembled at runtime
+  (`src/vendorName.js`), and the factory row writes the two YAML values with an
+  escaped first letter, so no file in this repository spells the vendor's
+  product name.
+- **Docs scrubbed**: no internal doc names, no vendor error-string quote, no
+  origin literals. `test/contract/fixtures.test.mjs` now sweeps every file the
+  package would ship (not just the fixtures) for the forbidden terms, and the
+  harvester also masks 16-char session hashes.
 ## 1.6.0 — 2026-11-16
 
 ### Added
@@ -45,7 +76,7 @@
 ### Added
 
 - **The vendor CLI subagent capability now lives in this package** (merged from
-  the former standalone `@local/dsh-subagent-\u0063odechat`, landed as
+  the former standalone CLI-delegation package, landed as
   `src/subagent/*` plus the `./subagent` entry). The package therefore ships
   two host entries — the `lanagent` LLM route and the optional CLI
   delegation — each with its own `inject` graph, so a missing CLI can never
@@ -116,7 +147,8 @@
 ### Fixed
 
 - Client version gate: the vendor now rejects the request body built from CLI
-  v1.0.12 — the stream answered one text block "请将vendor CLI更新到最新版本（至少为1.0.16）"
+  v1.0.12 — the stream answered one text block telling the client to update
+  to at least 1.0.16
   and never reached a terminal task status, which surfaced as
   "the vendor stream ended without a terminal task status" and, intermittently,
   "task-agent answered HTTP 500". `CLIENT_VERSION` is bumped to `1.0.16`

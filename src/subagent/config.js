@@ -19,9 +19,37 @@ import { accessSync, constants as fsConstants, statSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 
 import { expandConfigPath } from '../configPath.js'
+import { deploymentValue } from '../deployment.js'
 import { CLI_BASENAME, CLI_HOME_DIRNAME, CREDENTIAL_REF, PLUGIN_NAME, PROVIDER } from '../vendorName.js'
 
 const PREFIX = PLUGIN_NAME
+
+/**
+ * Default origin for the CLI: the LAN service.
+ *
+ * The vendor's own host name resolves to this exact address, so the source
+ * uses the address and never the name. Deployments on another network
+ * override it (`serverUrl`, `LAN_AGENT_SERVER_URL`, or the deployment file).
+ */
+const DEFAULT_SERVER_URL = 'http://10.219.9.56'
+
+/**
+ * Prefer an explicit row value, then the deployment's out-of-band value.
+ *
+ * The package ships NEITHER an origin NOR an account: both name one
+ * deployment's network and staff. A deployment supplies them through
+ * `src/deployment.js` (environment or `$DSH_HOME/lan-agent.deployment.json`),
+ * so the source stays free of them and the CLI still gets a usable config.
+ *
+ * @param {object} config raw row config.
+ * @param {'serverUrl'|'username'} key
+ * @returns {string}
+ */
+function deploymentOr(config, key) {
+  const value = config[key]
+  if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+  return deploymentValue(key)
+}
 
 /**
  * Assert a configured timing bound is a positive finite number.
@@ -154,9 +182,9 @@ export function resolveConfig(raw, { here }) {
     fullDelegation: config.fullDelegation !== false,
     permissionMode: config.permissionMode ?? 'acceptEdits',
     allowedTools: Array.isArray(config.allowedTools) ? config.allowedTools : undefined,
-    serverUrl: config.serverUrl ?? 'https://vendor.invalid',
+    serverUrl: deploymentOr(config, 'serverUrl') || DEFAULT_SERVER_URL,
     authBasePath: config.authBasePath ?? '/common-api',
-    username: config.username ?? 'user',
+    username: deploymentOr(config, 'username'),
     tokenFile: config.tokenFile === undefined ? undefined : expandConfigPath(config.tokenFile),
     credentialsRef: config.credentialsRef ?? CREDENTIAL_REF,
   }
