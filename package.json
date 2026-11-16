@@ -1,18 +1,22 @@
 {
   "name": "@local/dsh-provider-lan-agent",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "private": true,
   "description": "LAN agent service LLM provider route for DSH: a server-side agent driven through a client-side tool bridge.",
   "type": "module",
   "exports": {
     ".": "./index.js",
+    "./subagent": "./subagent.js",
     "./package.json": "./package.json",
-    "./client": "./client.js"
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "index.js",
+    "subagent.js",
     "client.js",
     "src",
+    "locale",
     "cordis.patch.yml",
     "README.md",
     "ARCHITECTURE.md",
@@ -23,6 +27,8 @@
     "@deepseek-ai/cordis": "~4.0.4 || ~4.0.5-alpha.1",
     "@deepseek-ai/dsh-credentials": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-rc.2",
     "@deepseek-ai/dsh-llm": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-subagent": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-rc.2",
+    "@deepseek-ai/dsh-subprocess": "0.2.0-rc.2 || 0.2.1-alpha.1 || 0.2.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.4"
   },
   "dsh": {

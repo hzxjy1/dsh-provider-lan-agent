@@ -159,7 +159,7 @@ EOF
 | `approvalTimeoutMs` | `120000` | 审批请求（policy=ask）最多等多久才告诉厂商"未获批准"。它以前借用 20s 的每工具超时，正常的慢审批会被厂商误读成工具超时 |
 | `toolTimeoutMs` | `20000` | 带外（bridge）路由上**真正在跑**的工具的软截止；审批等待已不再用它 |
 | `requestTimeoutMs` | `600000` | 单轮请求的硬截止。厂商实测有 282–312s 的静默等待，300s 曾把它们截成 "the turn exceeded the 300s request timeout" |
-| `toolAuditFile` | `~/.dsh/logs/lanagent-audit.jsonl` | 空 = 关闭；出厂配置启用，用**绝对路径**（cwd 不稳定）。JSONL 记录每次工具请求与每轮收尾，设置页诊断面板读的就是它 |
+| `toolAuditFile` | `$DSH_HOME/logs/lanagent-audit.jsonl` | 空 = 关闭；出厂配置启用，用**绝对路径**（cwd 不稳定）。JSONL 记录每次工具请求与每轮收尾，设置页诊断面板读的就是它 |
 
 > **工具失败的如实回报**：拒绝（PTC 拒绝直接名）或 `Error: …` 一律作为错误回给厂商，绝不会把失败的
 > 写/编辑报成 `success`；同一调用最多换一次风格，两次都被拒就如实回报，不会反复重试。
@@ -226,8 +226,8 @@ node --test test/contract/*.test.mjs  # 只跑契约测试：20 个 case，value
 ### 日志落在哪里
 
 厂商工具请求原先只活在 host 的 stdout 里，而本部署的 stdout 是 **tty**——所以上一次排查什么都
-没能落盘。现在出厂配置把 `toolAuditFile` 指到一个**绝对路径** `~/.dsh/logs/lanagent-audit.jsonl`
-（父目录会在首次写入时自动创建；留空即关闭）：
+没能落盘。现在出厂配置把 `toolAuditFile` 指到 `$DSH_HOME/logs/lanagent-audit.jsonl`
+（`~` 与 `$DSH_HOME` 由插件展开，行里不写死任何家目录；父目录会在首次写入时自动创建；留空即关闭）：
 
 - 每个厂商工具请求一行 JSON：`request` 在 loop 调用 park 时写、`settled` 在答案确定时写，
   两行用 `requestId` 关联；带外路由只写 `settled`。**被翻译层拒绝的请求也有记录**
@@ -266,11 +266,46 @@ dsh web >> ~/.dsh/logs/host.log 2>&1
 
 ## 打包注意（踩过的坑）
 
-本地 link 安装的包**不会解析 peerDependencies**（pnpm 会明确警告）。因此本插件
+本地 link 安装的包**不会解析 peerDependencies**（pnpm 会明确警告）。因此模型路由那一半
 **不裸导入任何 `@deepseek-ai/*`**：适配器是结构化实现（不 `extends LlmAdapter`），
 schemastery 通过「先试裸导入 → 再从 `process.argv[1]` 向上找 dsh 安装目录」的懒加载获取，
 失败就不导出 `Config`（插件仍能加载，只是设置界面看不到配置项）。
+
+**唯一例外是 `./subagent` 入口**（1.5.0 起）：它必须裸导入
+`@deepseek-ai/dsh-subagent` 与 `@deepseek-ai/dsh-subprocess`——这正是上游
+CLI-wrapping subagent provider 的做法，两者已声明为 peerDependencies。profile 安装时由
+dsh 自己的解析锚点解析；离线跑 `node --test` 不受影响（那套测试只导入无裸依赖的模块），
+但直接跑 `scripts/subagent-harness.mjs` 需要先 `test/make-anchor.sh` 建锚点。
 装好后用 `Config.listConfigs` 查本行，`status` 应为 `schema`。
 
 另外：包已在 profile manifest 里时，`install_bundle` 会因为 `pnpm add` 成为 no-op 而报
 `ambiguous-install`；正确顺序是 `remove_bundle` → `install_bundle <绝对目录>`。
+
+## 可选的厂商 CLI 子代理能力（1.5.0）
+
+同一个包的**第二个 host 入口** `@local/dsh-provider-lan-agent/subagent`（row id
+`subagent-\u0063odechat`），加上上游 `@deepseek-ai/dsh-tool-subagent` 那一行（row id
+`tool-subagent-\u0063odechat`），把厂商 CLI 接成一次性无人值守子代理，工具名
+`subagent_\u0063odechat`。
+
+**两条通道**
+
+| 调用方 | 形态 |
+|---|---|
+| DSH 自己的 agent（含 PTC 会话里的 `tools.subagent_\u0063odechat`） | 异步：立刻返回 `started subagent <id>`，答案由结算通知在**下一轮**送达父会话 |
+| 厂商模型（本 route 的 `use_mcp_tool(server_name="dsh_toolbox", tool_name="subagent_\u0063odechat")`） | 同上，另有 `buildRules` 里一段委派说明解释这个异步契约 |
+
+**CLI 由运维提供，本包不下载、不给来源**
+
+- 二进制放在 row 的 `binaryPath`（默认 `<包目录>/bin/<cli 名>`），隔离 HOME 为 `homeDir`（默认 `<包目录>/home`）。
+- **文件在 → 能力在；文件不在 → 能力彻底不存在**：provider 不注册，`subagent_\u0063odechat` 工具对
+  DSH agent 与厂商模型同时不可见（厂商工具箱里那条白名单自然解析不到），不会暴露一个永远失败的工具。
+- 可用性由 `fs.watch`（盯目录，不是文件）+ 挂载初检 + 15s 兜底轮询维持，**装/删都不需要重启**。
+- CLI 缺失时，设置页 **General 分区顶部**出现黄色横幅，写明期望路径；`GET /lanagent/cli` 提供状态。
+
+**配置字段**（`subagent-\u0063odechat` 行）：`binaryPath`、`homeDir`、`model`（必填语义：无 `--model` 时后端永不产出）、
+`mode`、`fullDelegation`/`permissionMode`、`allowedTools`、`maxBudgetUsd`、`timeoutMs`、`graceMs`、
+`cwd`、`tokenFile`、`credentialsRef`。凭据优先级：`credentialsRef`（DSH 凭据库）→ `tokenFile`。
+
+**测试**：`node --test` 覆盖 `subagent-config` / `subagent-watch`；真实委派用
+`test/make-anchor.sh` + `node scripts/subagent-harness.mjs`（要活 token）。

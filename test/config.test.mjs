@@ -10,8 +10,11 @@
  *     per-tool deadline;
  *   - the request deadline must leave room for the vendor's measured 282–312s
  *     silent gaps;
- *   - the audit trail must be enabled with an ABSOLUTE path, because the host's
- *     cwd is not stable and an empty value silently disables the writer.
+ *   - the audit trail must be enabled at a path that EXPANDS to absolute,
+ *     because the host's cwd is not stable and an empty value silently disables
+ *     the writer (`~` / `$DSH_HOME` are expanded by src/configPath.js);
+ *   - the CLI row must carry no machine-specific path: its binaryPath/homeDir
+ *     default to the package's own bin/ and home/.
  *
  * A YAML parser is deliberately not a dependency of this package, so the row is
  * read with anchored patterns: these are flat scalars under `llm-lan-agent`, and
@@ -23,6 +26,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+
+import { expandConfigPath } from '../src/configPath.js'
+import { SUBAGENT_TOOL_NAME } from '../src/vendorName.js'
 
 const text = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 
@@ -54,10 +60,25 @@ test('shipped row: the request deadline covers the vendor silent gaps', () => {
   assert.ok(request >= 600_000, `requestTimeoutMs ${request} is shorter than the measured 312s gap plus headroom`)
 })
 
-test('shipped row: the audit trail is enabled at an absolute JSONL path', () => {
+test('shipped row: the audit trail expands to an absolute JSONL path', () => {
   const file = scalar('toolAuditFile')
-  assert.ok(file.startsWith('/'), `toolAuditFile must be absolute, got ${file}`)
-  assert.ok(file.endsWith('.jsonl'), `toolAuditFile must be a JSONL file, got ${file}`)
+  const expanded = expandConfigPath(file)
+  assert.ok(expanded.startsWith('/'), `toolAuditFile must expand to an absolute path, got ${expanded}`)
+  assert.ok(expanded.endsWith('.jsonl'), `toolAuditFile must be a JSONL file, got ${expanded}`)
+})
+
+test('shipped row: the CLI row carries no machine-specific path', () => {
+  // binaryPath/homeDir stay omitted on purpose: the defaults are derived from
+  // the package's own location, so the row survives a relocated install. A
+  // hard-coded home directory is the regression this guards.
+  assert.doesNotMatch(text, /^\s*binaryPath:\s/m, 'binaryPath must stay omitted (package-relative default)')
+  assert.doesNotMatch(text, /^\s*homeDir:\s/m, 'homeDir must stay omitted (package-relative default)')
+  // The ASSEMBLED name, never a literal: the same rule the source follows.
+  assert.match(
+    text,
+    new RegExp(`^\\s*toolName:\\s*${SUBAGENT_TOOL_NAME}\\s*$`, 'm'),
+    'the delegation tool must stay published under its row',
+  )
 })
 
 test('shipped row: the question tool is reachable through the vendor toolbox', () => {

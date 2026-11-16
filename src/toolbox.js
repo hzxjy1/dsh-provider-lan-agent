@@ -23,6 +23,8 @@
  * @module src/toolbox
  */
 
+import { SUBAGENT_TOOL_NAME } from './vendorName.js'
+
 /** The declared server name the bridge also recognises in `use_mcp_tool`. */
 export const DEFAULT_TOOLBOX_NAME = 'dsh_toolbox'
 
@@ -60,6 +62,10 @@ export const DEFAULT_WHITELIST = Object.freeze([
   // Planning and delegation.
   'subagent',
   'subagent_fork',
+  // The vendor CLI's own delegation tool (see src/vendorName.js). It is an
+  // ASYNC subagent tool: the model receives `started subagent <id>` and the
+  // answer arrives as a settlement notice on the next turn.
+  SUBAGENT_TOOL_NAME,
   'todo_write',
   // The agent-to-agent message channel. Without a bridge route the child's own
   // return instruction is unreachable: the vendor's SendMessage addresses its

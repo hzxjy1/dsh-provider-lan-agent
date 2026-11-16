@@ -7,7 +7,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { DEFAULT_TOOLBOX_NAME, buildToolboxServers, collectMcpToolSchemas, completeToolboxSchemas, matchesWhitelist, selectToolboxTools } from '../src/toolbox.js'
+import { DEFAULT_TOOLBOX_NAME, DEFAULT_WHITELIST, buildToolboxServers, collectMcpToolSchemas, completeToolboxSchemas, matchesWhitelist, selectToolboxTools } from '../src/toolbox.js'
+import { SUBAGENT_TOOL_NAME } from '../src/vendorName.js'
 
 const objectSchema = (properties = { command: { type: 'string', description: 'cmd' } }) => ({
   type: 'object',
@@ -23,6 +24,19 @@ test('whitelist matching supports exact names and prefix patterns', () => {
   assert.equal(matchesWhitelist('mcp__serial__list_ports', ['mcp__*']), true)
   assert.equal(matchesWhitelist('mcp__claw__claw_bash', ['mcp__*']), true)
   assert.equal(matchesWhitelist('subagent', ['mcp__*']), false)
+})
+
+test('the vendor CLI delegation tool is published by default (B1)', () => {
+  // The runtime value is unchanged (`subagent_<vendor>`); only the whitelist's
+  // spelling comes from the assembled constant. This is the B1 regression guard:
+  // the vendor model must be able to name the tool the shipped subagent row
+  // registers, and the bridge must be able to resolve that call.
+  assert.equal(matchesWhitelist(SUBAGENT_TOOL_NAME, DEFAULT_WHITELIST), true)
+  const servers = buildToolboxServers({
+    schemas: [tool(SUBAGENT_TOOL_NAME)],
+    whitelist: [SUBAGENT_TOOL_NAME],
+  })
+  assert.deepEqual(servers[DEFAULT_TOOLBOX_NAME].tools.map((entry) => entry.name), [SUBAGENT_TOOL_NAME])
 })
 
 test('selection keeps whitelisted tools with real JSON Schema parameters', () => {

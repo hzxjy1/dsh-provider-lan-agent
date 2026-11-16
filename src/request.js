@@ -20,6 +20,8 @@
  * @module src/request
  */
 
+import { SUBAGENT_TOOL_NAME } from './vendorName.js'
+
 /** Placeholder text for an image part; this route is text-only in v1. */
 const IMAGE_NOTE = '[图片已省略：lanagent 路由当前只支持文本输入]'
 
@@ -29,7 +31,7 @@ const FOLD_LIMIT = 2000
 /**
  * Proven-good client identity, copied from vendor CLI. The server gates on
  * this value (measured 2026-11-10: v1.0.12 is answered with a text-only block
- * "请将vendor CLI更新到最新版本（至少为1.0.16）" and the turn never reaches a
+ * demanding a client update to at least 1.0.16, and the turn never reaches a
  * terminal task status; v1.0.16 works, stream shape unchanged).
  */
 export const CLIENT_ID = 'CLI'
@@ -189,6 +191,14 @@ export function buildRules({ system, systemParts = [], systemPromptMode = 'rules
         '    两者都失败时把报错原文转达用户，不要用 shell 去猜技能目录。',
         '  · ask_user_question —— 向用户提问（需要用户决策时用它，而不是自己假设答案）。',
         '  · todo_write —— 维护待办清单。',
+        `  · ${SUBAGENT_TOOL_NAME} —— 把**自包含的文本任务**外包给厂商自己的 CLI 子代理（另一个进程、另一套运行时）。`,
+        '    用户说"交给子代理去做/外包出去"，或点到某个具体的 CLI 子代理时，就调用它：不要自己动手，',
+        '    更不要自己做完之后声称"这是子代理给出的结论"——那是编造，属于严重错误。',
+        '    它以 use_mcp_tool 调用，arguments 需带 {"description":"<3-5 个词的短任务名>","prompt":"<完整、自包含的任务与交付要求>"}。',
+        '    它是**异步**的：调用只返回 \`started subagent <id>\`；子代理跑完后，结果会在**下一轮**以一条',
+        '    "…finished…Its closing message: …" 的用户消息送到你面前，那时你再把结论转述给用户。',
+        '    所以调用之后请直接结束本回合、告诉用户"已委派、结果稍后到"，不要为等结果而反复轮询或重复调用。',
+        '    它只能带回文本结论；需要碰本机 MCP 工具或硬件的任务留在你自己这边做，不要外包。',
         `调用方式：use_mcp_tool 且 server_name="${toolboxName}"、tool_name 为上面的工具名、arguments 为它的参数对象。`,
         '你自带的 ask_followup_question 同样可用：它会被桥接成 DSH 的真实提问工具，用户的回答在同一轮里作为该调用的',
         '结果回到你手上，你可以接着干活。**不要**把问题写成纯文本后结束回合——那样这一轮就结束了，用户只能再补一句"继续"。',

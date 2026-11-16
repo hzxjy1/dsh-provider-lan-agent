@@ -24,6 +24,7 @@ import { isAbsolute, join, relative, sep } from 'node:path'
 import { promisify } from 'node:util'
 
 import { LanAgentError, FailureCode } from './errors.js'
+import { SUBAGENT_TOOL_NAME } from './vendorName.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -289,7 +290,7 @@ export const PASSTHROUGH_TOOL_NAMES = Object.freeze(new Set([
   // skill CATALOG (DSH injects it into the conversation) but has no way to load
   // one — it ends up searching the disk with shell commands instead.
   'skill', 'web_fetch', 'web_search',
-  'ask_user_question', 'subagent', 'subagent_fork', 'job_list', 'job_output', 'job_kill',
+  'ask_user_question', 'subagent', 'subagent_fork', SUBAGENT_TOOL_NAME, 'job_list', 'job_output', 'job_kill',
   // A continuable child's DSH prompt tells it to return its result with
   // `send_message({agent_id})`. The name must reach DSH when the vendor sends it
   // to the bridge, or the child has no way to report (see the rules note in

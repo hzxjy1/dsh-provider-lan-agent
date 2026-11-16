@@ -38,6 +38,8 @@ import { buildRules, buildTaskAgentBody, projectConversation } from './src/reque
 import { createJsonStreamParser, createStreamMapper } from './src/stream.js'
 import { createAuditWriter } from './src/audit.js'
 import { readAuditTail } from './src/auditFeed.js'
+import { cliHint, getCliStatus } from './src/subagent/status.js'
+import { expandConfigPath } from './src/configPath.js'
 import { DispatchMode, createToolDispatcher } from './src/dispatch.js'
 import { requestApproval, requiresApproval } from './src/approval.js'
 import { LOOP_EXCLUDED, PTC_PROGRAM_MAX_MS, isToolRefusal, linkParkedAbort, looksLikePtcPrompt, outcomesForPlan, withStyle } from './src/loopPlan.js'
@@ -114,6 +116,9 @@ export const inject = ['llm']
 const DEFAULT_ROUTE = 'lanagent'
 /** Same-origin route the settings panel reads the audit tail from. */
 const AUDIT_ROUTE = '/lanagent/audit'
+
+/** Same-origin route the settings banner reads the optional CLI state from. */
+const CLI_STATUS_ROUTE = '/lanagent/cli'
 const DEFAULT_BASE_URL = 'http://10.219.9.56'
 
 /**
@@ -1057,7 +1062,8 @@ export function apply(ctx, config) {
   const mcpToolboxName = String(configValue(config, 'mcpToolboxName', DEFAULT_TOOLBOX_NAME))
   const mcpToolboxMaxTools = Number(configValue(config, 'mcpToolboxMaxTools', 60))
   const mcpToolWhitelist = configValue(config, 'mcpToolWhitelist', [...DEFAULT_WHITELIST])
-  const toolAuditFile = String(configValue(config, 'toolAuditFile', ''))
+  // `~` and `$DSH_HOME` are understood so a row need not spell a machine home.
+  const toolAuditFile = expandConfigPath(configValue(config, 'toolAuditFile', ''))
   /** One line per vendor tool request; without it a refused name leaves no trace. */
   const audit = toolAuditFile.length === 0 ? undefined : createAuditWriter(toolAuditFile, { logger })
   /** Remembered dispatch route per session: PTC sessions pay the refusal once. */
@@ -1686,6 +1692,30 @@ export function apply(ctx, config) {
           res.end(body)
         },
       }), 'lanagent: audit feed route')
+      // The optional CLI capability reports its availability here. A separate
+      // route keeps the banner from pulling the audit tail (up to 1 MiB) on
+      // every refresh just to learn one boolean.
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: CLI_STATUS_ROUTE,
+        handler: (req, res) => {
+          if (req.method !== 'GET' && req.method !== 'HEAD') {
+            res.writeHead(405, { allow: 'GET, HEAD' })
+            res.end()
+            return
+          }
+          const status = getCliStatus()
+          const body = JSON.stringify({
+            ...status,
+            hint: status.known && !status.present ? cliHint(status.path) : '',
+          })
+          res.writeHead(200, {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': 'no-store',
+          })
+          res.end(body)
+        },
+      }), 'lanagent: CLI status route')
     })
   }
 

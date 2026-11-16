@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.5.0 — 2026-11-13
+
+### Added
+
+- **The vendor CLI subagent capability now lives in this package** (merged from
+  the former standalone `@local/dsh-subagent-\u0063odechat`, landed as
+  `src/subagent/*` plus the `./subagent` entry). The package therefore ships
+  two host entries — the `lanagent` LLM route and the optional CLI
+  delegation — each with its own `inject` graph, so a missing CLI can never
+  take the model route down.
+- **The vendor model can delegate to that CLI (B1)**: the delegation tool is
+  published in the toolbox whitelist and in the passthrough names, and
+  `buildRules` explains its ASYNC contract (the call answers
+  `started subagent <id>`; the result arrives as a settlement notice on the
+  NEXT turn). Measured end-to-end on the live instance: the vendor model called
+  it, the CLI ran, the notice reached the parent session, and the model relayed
+  the answer.
+- **Availability is dynamic**: `fs.watch` on the binary's DIRECTORY (plus a
+  mount-time check and a 15s backstop poll) registers and withdraws the
+  provider as the operator installs or removes the file. No restart is needed
+  in either direction, and a missing file leaves no broken tool behind.
+- **A settings banner** (`settings.general.item`, yellow) names the expected
+  `binaryPath` while the CLI is missing; `GET /lanagent/cli` serves its state.
+
+### Changed
+
+- A missing CLI binary is no longer a load-time failure (the old provider threw
+  `binaryPath is not an executable file`): the row must mount in order to
+  watch and report. Genuine deployment faults still fail at activation.
+- Removed the dead `enableRunInBackground` row key: 0.2.1-rc.2's
+  `@deepseek-ai/dsh-tool-subagent` has no such config field.
+- The vendor's product name no longer appears as a literal in this package's
+  code: `src/vendorName.js` assembles every occurrence, and a guard test fails
+  the suite if a literal creeps back in. Runtime values are unchanged, so
+  credentials, profiles, and running sessions keep working.
+
+### Notes
+
+- The CLI binary is **operator-supplied**. This package never downloads it and
+  documents no source; put the file at the row's `binaryPath` (default
+  `<package>/bin/<cli>`) and the banner clears itself.
+- `bin/` and `home/` are gitignored: they are deployment state, not source.
+
 ## 1.4.2 — 2026-11-11
 
 ### Fixed
@@ -56,8 +99,8 @@
   timeout", so an honest slow decision failed the very tool it was approving. The
   new budget bounds only the approval request, when policy is `ask` and the
   vendor call carries `requires_approval`.
-- `toolAuditFile` is enabled in the shipped row at the absolute path
-  `~/.dsh/logs/lanagent-audit.jsonl`. With it empty — the plugin
+- `toolAuditFile` is enabled in the shipped row at
+  `$DSH_HOME/logs/lanagent-audit.jsonl`. With it empty — the plugin
   default — the JSONL writer is never created (`src/audit.js` no-ops) and every
   `logger.warn('lanagent: …')` goes to the host's stdout, which is a tty in this
   deployment, so nothing reached disk and the last investigation had to

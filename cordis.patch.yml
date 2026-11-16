@@ -108,6 +108,12 @@
           - 'mcp__claw__*'
           - subagent
           - subagent_fork
+          # The vendor CLI's delegation tool, registered by the
+          # `@deepseek-ai/dsh-tool-subagent` row whose provider is `\u0063odechat`.
+          # It is ASYNCHRONOUS by design: the model receives `started subagent
+          # <id>` and the answer arrives as a settlement notice on the NEXT
+          # turn — so it needs no long parked call and no extra budget.
+          - subagent_\u0063odechat
           - todo_write
           # The child's return channel. The vendor's own SendMessage addresses
           # vendor tasks ("Task <id> not found"), so a continuable child had no
@@ -163,4 +169,44 @@
         # record per completed vendor turn, and it feeds the settings diagnostics
         # panel. The parent directory is created on first write; the file is
         # capped (~256 KiB) and truncated in place.
-        toolAuditFile: ~/.dsh/logs/lanagent-audit.jsonl
+        # `~` and `$DSH_HOME` are expanded by the plugin (src/configPath.js), so
+        # the row carries no machine-specific home directory.
+        toolAuditFile: $DSH_HOME/logs/lanagent-audit.jsonl
+
+    # The optional vendor CLI subagent capability: a SECOND host entry of the
+    # same package, with its own `inject` graph (subagents + subprocess), so a
+    # missing CLI can never take the model route down with it. The capability is
+    # offered only while the binary exists — the provider is registered and
+    # withdrawn by a directory watch, and the model-facing tool follows.
+    #
+    # The CLI binary is SUPPLIED BY THE OPERATOR. This package never downloads
+    # it and documents no source; put the file at `binaryPath` and the settings
+    # page stops showing the "missing CLI" banner.
+    - id: subagent-\u0063odechat
+      name: '@local/dsh-provider-lan-agent/subagent'
+      config:
+        # binaryPath / homeDir are DELIBERATELY omitted: they default to THIS
+        # package's own `bin/` and `home/`, so the row carries no
+        # machine-specific path and a relocated install keeps working. Set them
+        # only when the files live elsewhere; `~` and `$DSH_HOME` are expanded.
+        # `--model` is mandatory: with no model the backend accepts the request
+        # and streams one keepalive chunk per second, forever.
+        model: deepseek-v4.1-flash
+        mode: action
+        fullDelegation: true
+        maxBudgetUsd: 2
+        timeoutMs: 600000
+        # Fallback only: the credential reference \u0063odechat_API_KEY wins. Keep the
+        # reference current (the desktop app's localStorage has the live JWT).
+        tokenFile: ~/.\u0063odechat/auth/prod/token
+
+    # The shipped delegation tool, pointed at the route above. It contributes
+    # the global tool named `subagent_\u0063odechat` while the provider is
+    # registered; `maxDepth: provider-managed` is required for an
+    # out-of-process provider, whose delegation budget belongs to the child.
+    - id: tool-subagent-\u0063odechat
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: \u0063odechat
+        toolName: subagent_\u0063odechat
+        maxDepth: provider-managed

@@ -3,6 +3,10 @@ node_modules/
 *.log
 *.jsonl
 .lan-agent-memory/
+# The operator-supplied CLI binary and its isolated home: never distributed,
+# never committed. Their presence is deployment state, not source.
+bin/
+home/
 DESIGN.md
 MANUAL-TEST.md
 probe/

@@ -148,9 +148,12 @@ route.
 - `pathMappings` defaults to the agent CLI's home mapped to
   `.lan-agent-memory` under the session workspace. Override it only when the
   deployment's spelling differs.
-- `toolAuditFile` is normally disabled (empty). This deployment enables it at the
-  absolute path `~/.dsh/logs/lanagent-audit.jsonl`, because otherwise
-  the host's stdout — a tty here — is the only trace. The JSONL carries a
+- `toolAuditFile` is normally disabled (empty). This deployment enables it at
+  `$DSH_HOME/logs/lanagent-audit.jsonl`, because otherwise the host's stdout — a
+  tty here — is the only trace. Path-valued fields (`toolAuditFile`, the CLI's
+  `binaryPath`/`homeDir`/`tokenFile`/`cwd`) accept `~` and `$DSH_HOME`
+  (`src/configPath.js`), and the CLI fields default to package-relative
+  locations, so no row has to spell a machine home. The JSONL carries a
   `request` / `settled` pair per vendor tool request, joined by `requestId`, plus
   one `turn` record per completed vendor turn.
 
@@ -171,3 +174,33 @@ route.
   session and wraps calls in a program.
 - Tool results are shaped for the service's own model, not for DSH's transcript:
   a wrong shape does not fail loudly, it teaches the model to misread output.
+
+## The optional CLI subagent entry
+
+The package exposes a SECOND host entry, `./subagent` (row `subagent-\u0063odechat`),
+beside the model route. It registers a `ctx.subagents` provider for the
+vendor's CLI and is paired with the shipped `@deepseek-ai/dsh-tool-subagent`
+row (row `tool-subagent-\u0063odechat`, `maxDepth: provider-managed`), which
+contributes the model-facing tool.
+
+Two properties shape the code:
+
+- **Availability is a watch, not a config check.** The binary is
+  operator-supplied, so `src/subagent/watch.js` watches its DIRECTORY
+  (`fs.watch`), checks once at mount, and keeps a low-frequency unref'd poll
+  as a backstop. The provider is registered and withdrawn as the file appears
+  and disappears; withdrawing it unmounts the tool through the tool row's own
+  `subagent/provider-removed` listener. A missing file therefore leaves no
+  broken tool for any agent to call, and no restart is needed in either
+  direction.
+- **The two entries share only a tiny status store.** `src/subagent/status.js`
+  is deliberately dependency-free: the subagent entry writes
+  `{known, present, path}` and the model-route entry serves it over
+  `GET /lanagent/cli` for the settings banner. `known` keeps a deployment
+  that never mounts the subagent row from rendering a false "missing" banner.
+
+The delegation itself is a one-shot subprocess run
+(`src/subagent/runner.js`): isolated `HOME`, seeded JWT, banner stripping,
+process-deadline and cancellation classified apart. `config.js` is
+dependency-free on purpose so `node --test` works without a module anchor;
+only `provider.js`/`runner.js` reach the real `@deepseek-ai/*` seams.

@@ -22,7 +22,9 @@ window.__ModuleLoader__.load({
     const NS = 'settings.lanagentAudit'
     const inject = ['slots', 'locale']
     const ENDPOINT = '/lanagent/audit'
+    const ENDPOINT_CLI = '/lanagent/cli'
     const REFRESH_MS = 10_000
+    const CLI_REFRESH_MS = 30_000
 
     const DICT = {
       zh: {
@@ -47,6 +49,7 @@ window.__ModuleLoader__.load({
         pending: '停放中',
         failed: '失败',
         readError: '读取审计日志失败：',
+        cliMissing: '缺少 CLI 软件；装了插件的你知道在哪里下载，请把它放到 ',
       },
       en: {
         nav: 'LAN Agent',
@@ -70,6 +73,7 @@ window.__ModuleLoader__.load({
         pending: 'in loop',
         failed: 'failed',
         readError: 'Could not read the audit log: ',
+        cliMissing: 'The optional CLI is not installed. Put the file you already have at ',
       },
     }
 
@@ -97,6 +101,12 @@ window.__ModuleLoader__.load({
 .apl_audit .apl_wait { color: var(--dsw-alias-state-idle-primary); }
 .apl_audit .apl_body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
   color: var(--dsw-alias-label-secondary); white-space: pre-wrap; word-break: break-all; max-height: 6.5em; overflow: hidden; }
+.apl_banner { display: flex; align-items: flex-start; gap: 8px; box-sizing: border-box; width: 100%;
+  padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5;
+  color: var(--dsw-alias-state-warn-primary, #6b5200);
+  background: var(--dsw-alias-state-warn-tertiary, #fff6d8);
+  border: 1px solid var(--dsw-alias-state-warn-secondary, #e8b931); }
+.apl_banner code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
 `
 
     function localeTag(ctx) {
@@ -168,6 +178,9 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { className: 'apl_audit' }, [
+        // The CLI banner belongs to THIS plugin's page: it is about this
+        // plugin's optional capability, not about the harness in general.
+        h(CliBanner, { key: 'cli', t }),
         h('h2', { key: 'title' }, t('title')),
         h('p', { key: 'desc' }, t('description')),
         h('div', { className: 'apl_bar', key: 'bar' }, [
@@ -181,6 +194,37 @@ window.__ModuleLoader__.load({
         records.length === 0
           ? h('p', { key: 'empty' }, t('empty'))
           : h('div', { className: 'apl_rows', key: 'rows' }, records.map(row)),
+      ])
+    }
+
+    /**
+     * The settings banner for the optional CLI capability. It renders nothing
+     * unless a watch has actually looked (`known`) and found the file missing
+     * — a deployment without the subagent row never sees it.
+     */
+    function CliBanner(props) {
+      const t = props.t
+      const [status, setStatus] = useState(null)
+      useEffect(() => {
+        let alive = true
+        const load = async () => {
+          try {
+            const response = await fetch(ENDPOINT_CLI, { headers: { accept: 'application/json' } })
+            if (!response.ok) return
+            const body = await response.json()
+            if (alive) setStatus(body)
+          } catch {
+            /* advisory only: a failed read simply shows nothing */
+          }
+        }
+        void load()
+        const timer = setInterval(() => { void load() }, CLI_REFRESH_MS)
+        return () => { alive = false; clearInterval(timer) }
+      }, [])
+      if (status === null || status.known !== true || status.present === true) return null
+      return h('div', { className: 'apl_banner' }, [
+        h('span', { key: 'label' }, t('cliMissing')),
+        h('code', { key: 'path' }, String(status.path ?? '')),
       ])
     }
 
