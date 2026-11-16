@@ -32,6 +32,14 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { LanAgentAuth, configValue } from './src/auth.js'
+import {
+  AuthSettingsError,
+  createAuthSettings,
+  isSameOrigin,
+  projectAuthError,
+  readJsonBody,
+  sendJson,
+} from './src/authSettings.js'
 import { LanAgentCatalog, INPUT_MODALITIES } from './src/catalog.js'
 import { LanAgentError, FailureCode, isVendorTaskBusy } from './src/errors.js'
 import { buildRules, buildTaskAgentBody, projectConversation } from './src/request.js'
@@ -119,6 +127,11 @@ const AUDIT_ROUTE = '/lanagent/audit'
 
 /** Same-origin route the settings banner reads the optional CLI state from. */
 const CLI_STATUS_ROUTE = '/lanagent/cli'
+
+/** Account surface read by the plugin's own settings section. */
+const AUTH_STATUS_ROUTE = '/lanagent/auth'
+const AUTH_LOGIN_ROUTE = '/lanagent/auth/login'
+const AUTH_LOGOUT_ROUTE = '/lanagent/auth/logout'
 const DEFAULT_BASE_URL = 'http://10.219.9.56'
 
 /**
@@ -136,9 +149,10 @@ const DEFAULT_PATH_MAPPINGS = Object.freeze([{ from: VENDOR_MEMORY_ROOT, to: '.l
  * to write it — the reference itself is never a secret (design notes §5.1.1).
  *
  * Built only when schemastery is reachable; see {@link loadSchemastery}. Without
- * it the row's config is read as a plain object (all defaults still apply), and
- * the credential reference has to be stored from the file or the environment
- * rather than from the settings page.
+ * it the row's config is read as a plain object (all defaults still apply) and
+ * the Models surface cannot discover the refs from a schema. The plugin's own
+ * account card still works there, because it reads the refs with
+ * {@link configValue} rather than through the schema.
  *
  * @param {object} z the schemastery module.
  */
@@ -1130,6 +1144,13 @@ export function apply(ctx, config) {
   })
 
   /**
+   * The account/password surface of the plugin's settings page. It shares the
+   * auth object the turns use, so a successful settings login is the token the
+   * next request carries — no restart, no second cache.
+   */
+  const authSettings = createAuthSettings({ auth, credentials: credentialsService, logger })
+
+  /**
    * The vendor's catalog endpoints joined the authenticated surface on
    * 2026-11-10 (measured: a bare GET is answered with code -106
    * "token不存在，请登录" under HTTP 200, which the old unauthenticated fetch
@@ -1671,6 +1692,112 @@ export function apply(ctx, config) {
   // and served on the loopback carrier the GUI already sits on.
   if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (webCtx) => {
+      /**
+       * Wrap one account route so an exception becomes a JSON error instead of
+       * a bare 500 with no explanation in the settings card. Credential values
+       * never reach this log: every message below names refs, not secrets.
+       */
+      const authRoute = (run) => (req, res) => {
+        void (async () => {
+          try {
+            await run(req, res)
+          } catch (error) {
+            const projected = projectAuthError(error)
+            logger.warn?.(`lanagent: settings account request failed (${projected.status}): ${projected.message}`)
+            if (!res.headersSent) sendJson(res, projected.status, { error: projected.message })
+            else res.destroy()
+          }
+        })()
+      }
+      const methodNotAllowed = (res, allow) => {
+        res.writeHead(405, { allow })
+        res.end()
+      }
+      /**
+       * These routes sit on the same web server as the app, but a named route
+       * is not automatically behind the app's browser-auth fence. Require the
+       * same trusted Host/Origin and signed session the app requires whenever
+       * the connection service is present; a non-web composition (where it is
+       * absent) still gets the explicit same-origin check on the write routes.
+       */
+      const requireSession = (req, res) => {
+        const connection = ctx.get?.('connection')
+        if (connection === undefined || typeof connection.requestRejection !== 'function') return false
+        let rejection
+        try {
+          rejection = connection.requestRejection(req)
+        } catch {
+          rejection = 401
+        }
+        if (rejection === undefined) return false
+        sendJson(res, rejection, {
+          error: rejection === 401
+            ? 'dsh web authentication required; reopen the URL printed by dsh web'
+            : 'request authority is not trusted',
+        })
+        return true
+      }
+
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: AUTH_STATUS_ROUTE,
+        handler: authRoute(async (req, res) => {
+          if (requireSession(req, res)) return
+          if (req.method !== 'GET' && req.method !== 'HEAD') {
+            methodNotAllowed(res, 'GET, HEAD')
+            return
+          }
+          const body = await authSettings.status()
+          if (req.method === 'HEAD') {
+            res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+            res.end()
+            return
+          }
+          sendJson(res, 200, body)
+        }),
+      }), 'lanagent: account status route')
+
+      // The write half. Same-origin only: this is the one route that can place
+      // a durable credential, so a cross-site form must not reach it.
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: AUTH_LOGIN_ROUTE,
+        handler: authRoute(async (req, res) => {
+          if (requireSession(req, res)) return
+          if (req.method !== 'POST') {
+            methodNotAllowed(res, 'POST')
+            return
+          }
+          if (!isSameOrigin(req)) {
+            sendJson(res, 403, { error: 'cross-origin credential writes are refused' })
+            return
+          }
+          const type = String(req.headers['content-type'] ?? '').toLowerCase()
+          if (!type.includes('application/json')) {
+            throw new AuthSettingsError('content-type must be application/json', 415)
+          }
+          const payload = await readJsonBody(req)
+          sendJson(res, 200, await authSettings.login(payload))
+        }),
+      }), 'lanagent: account login route')
+
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: AUTH_LOGOUT_ROUTE,
+        handler: authRoute(async (req, res) => {
+          if (requireSession(req, res)) return
+          if (req.method !== 'POST') {
+            methodNotAllowed(res, 'POST')
+            return
+          }
+          if (!isSameOrigin(req)) {
+            sendJson(res, 403, { error: 'cross-origin credential writes are refused' })
+            return
+          }
+          sendJson(res, 200, await authSettings.logout())
+        }),
+      }), 'lanagent: account logout route')
+
       webCtx.effect(() => webCtx.webServer.register({
         kind: 'exact',
         path: AUDIT_ROUTE,

@@ -1,4 +1,4 @@
 {
   "title": "LAN Agent",
-  "description": "The LAN agent service as a native DSH LLM route (lanagent), plus an optional one-shot CLI subagent capability."
+  "description": "The LAN agent service as a native DSH LLM route (lanagent), with account/password sign-in on its settings page and an optional one-shot CLI subagent capability."
 }

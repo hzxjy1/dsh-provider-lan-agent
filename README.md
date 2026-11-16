@@ -28,6 +28,7 @@ WS    /ws-api/coagent/<session_id>  → 服务端的工具调用，在本进程�
 | 能力 | 状态 |
 |---|---|
 | 认证：账号密码登录 → JWT（内存缓存、`-103/-106` 自动重登、失败指数退避 + 每小时上限） | ✅ M1 |
+| **设置页账号登录**：没有完整凭据时直接显示账密输入框；保存后立即登录并写入凭据存储；已配置时显示状态与登录/更换/退出 | ✅ 1.6.0 |
 | 模型目录：拉 `model_groups` + 缓存 + 静态回退；`listModels` / `resolveModel` / 模型发现 | ✅ M1 |
 | 请求投影：DSH 历史 → 两角色对话；系统提示词走 `rules`；skill 元数据走 `skills` | ✅ M1 |
 | 流解析：拼接 JSON 解析 + 累积快照差分 → DSH `StreamChunk`；`task_status` 收尾；厂商 usage 仅旁路观测、完成时上报本地 tokenMeter 压力 | ✅ M1 |
@@ -42,7 +43,7 @@ WS    /ws-api/coagent/<session_id>  → 服务端的工具调用，在本进程�
 | **"假完成"不再伪装**：厂商宣布完成却没有正文 / 工具调用后没有最终答复 / 断流没有终态 → protocol error，不再显示成"正常结束" | ✅ 1.4.0 |
 | 可观测性：`toolAuditFile` 在出厂配置里启用（绝对路径 JSONL，含每次工具请求 + 每轮收尾记录） | ✅ 1.4.0 |
 
-**验收证据**：`node --test` **246 项全绿**（协议/认证/目录/工具翻译/派发/审计 + 20 个契约 fixture 的契约测试）；
+**验收证据**：`node --test` **283 项全绿**（协议/认证/目录/工具翻译/派发/审计/设置页账号登录 + 20 个契约 fixture 的契约测试）；
 真实服务验证脚本保留在本地，不随仓库发布；
 GUI 模型选择器出现 `LAN Agent` 与 6 个模型；**真实 GUI 会话端到端跑通**
 （厂商 agent 调 `execute_command` → 桥 → DSH 真跑 `pwd && ls api-reference.md && date +%s` → 输出正确，
@@ -89,7 +90,13 @@ GUI 模型选择器出现 `LAN Agent` 与 6 个模型；**真实 GUI 会话端�
 
 ## 账号与密码怎么填
 
-**升级提示**：本版本的凭据引用名是 `LAN_AGENT_USER` / `LAN_AGENT_PASSWORD`。如果从旧版本升级，请把账号和密码复制到这两个引用下（Models 页可直接写入），旧引用名不再读取。
+**首选：插件自己的设置页。** 打开 **设置 → LAN Agent**：账号或密码任一缺失时，页面顶部直接显示
+账号 / 密码输入框，填好后点“保存并登录”。Host 会**先向厂商登录**，成功后才把这两项写入 DSH 凭据
+存储；JWT 只留在内存，密码不回显、不写日志。凭据已配置时，页面显示“凭据已配置 / 已登录”，并给出
+“登录”（重启后用已存凭据重新换 JWT）、“更换账号密码”和“退出登录”。凭据来源（文件 / 环境变量）
+也显示在引用名旁边。
+
+**升级提示**：本版本的凭据引用名是 `LAN_AGENT_USER` / `LAN_AGENT_PASSWORD`。如果从旧版本升级，请把账号和密码复制到这两个引用下（设置页或 Models 页可直接写入），旧引用名不再读取。
 
 **两者都当隐藏信息**，都走 DSH 凭据 seam（`~/.dsh/.credentials.yaml` 的 `refs:`，权限 600，
 或进程环境变量 / `.env`）。配置文件里**只有引用名，没有明文，也没有账号**：
@@ -106,7 +113,8 @@ export LAN_AGENT_USER='user'
 export LAN_AGENT_PASSWORD='<你的密码>'
 ```
 ③ 设置界面的 Models 页：本行的 `userRef` / `passwordRef` 在 schema 里都带
-`role: "credential-ref"`，所以它们可以像 API key 一样被写入。
+`role: "credential-ref"`，所以它们可以像 API key 一样被写入。LAN Agent 自己的设置页是更直接的
+入口，两条路径写的是同一组引用。
 
 优先级：**凭据 ref 优先**，Config 的 `user` 字段只是回退（两者都在且不一致时会告警，
 不会静默登错账号）。
@@ -205,13 +213,13 @@ protocol error：
 包以本地路径安装（profile 的 `node_modules/@local` 符号链接），不从公共 registry 发布：
 
 ```sh
-pnpm test          # 246 项离线测试
+pnpm test          # 283 项离线测试
 ```
 
 ## 测试
 
 ```sh
-node --test                        # 246 项离线测试：解析/差分/投影/rules/认证/目录 + 工具翻译 + 契约 fixture + 出厂配置（无需锚点）
+node --test                        # 283 项离线测试：解析/差分/投影/rules/认证/目录 + 工具翻译 + 设置页账号 + 契约 fixture + 出厂配置（无需锚点）
 node --test test/contract/*.test.mjs  # 只跑契约测试：20 个 case，value 与 text-only 两种 outcome
 ```
 

@@ -2,7 +2,9 @@
 #
 # One Host row. The plugin registers the `lanagent` provider route on `ctx.llm`
 # and declares it as a configurable provider, so the Models settings surface can
-# see it and write the credential reference this row names.
+# see it. The plugin's OWN settings section takes the account and password
+# directly (no credentials need to be written here), and also renders the
+# diagnostics panel.
 #
 # `passwordRef` is a credential REFERENCE, never a secret: the password itself
 # lives in the credential store ($DSH_HOME/.credentials.yaml `refs:`, mode 600)

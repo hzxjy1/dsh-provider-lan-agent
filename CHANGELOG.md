@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.6.0 — 2026-11-16
+
+### Added
+
+- **The LAN Agent settings page now takes the account and password directly.**
+  The section (设置 → LAN Agent) starts with an account card: when either
+  credential is missing it forces the account/password inputs open, so a fresh
+  deployment no longer has to know about the Models page or edit
+  `.credentials.yaml` by hand. “保存并登录” logs in to the vendor FIRST and
+  writes `LAN_AGENT_USER` / `LAN_AGENT_PASSWORD` only after the login succeeds,
+  so a typo can never displace a working pair. When both are configured the card
+  shows “凭据已配置”, whether a JWT is live, and sign-in / change / sign-out
+  controls; the copy stays compact (no description, refs line, or footer note).
+- **Three same-origin account routes**: `GET /lanagent/auth` (presence and
+  writability, never values), `POST /lanagent/auth/login` (form submission, or
+  an empty body to re-login with the stored pair after a restart), and
+  `POST /lanagent/auth/logout` (drops the memory JWT; stored credentials stay).
+  The write routes refuse cross-origin requests and non-JSON bodies, and the
+  JSON body is bounded.
+- `LanAgentAuth.login()` accepts a supplied account/password without reading the
+  store first. A manual attempt skips the automatic backoff window — a human
+  correcting a password is not a retry storm — while the per-hour lockout cap
+  still applies. `LanAgentAuth.status()` reports configured/source/writable/
+  live-JWT facts without exposing either value, and clears a stale
+  “missing credential” note as soon as that half appears.
+
+### Fixed
+
+- The login/logout response no longer overwrites the auth `mode` with the action
+  name (`form` / `stored` / `logout`). The client keys “更换账号密码” on
+  `mode === 'login'`, so after signing out that button silently did nothing.
+  The action now travels in a separate `source` field, and a regression test
+  asserts `mode` stays `login` for every action.
+
+### Tests
+
+- `node --test`: 283/283, including the new `test/authSettings.test.mjs`
+  (route-layer persistence order, stored re-login, token mode, same-origin
+  refusal, bounded body reader, and status/login unit coverage).
+
 ## 1.5.0 — 2026-11-13
 
 ### Added

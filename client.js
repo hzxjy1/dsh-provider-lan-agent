@@ -1,16 +1,17 @@
 /**
  * `@local/dsh-provider-lan-agent` — browser half.
  *
- * One settings section (`settings.section`, id `lanagent-audit`) showing the
+ * One settings section (`settings.section`, id `lanagent-audit`). It shows the
+ * deploy-time account state first — an account/password form when the service
+ * has no stored login yet, and a status/relogin card when it does — then the
  * translation diagnostics for the agent's tool requests: what it asked for,
  * which DSH call ran, and how it was answered. Loop calls also appear in the
  * conversation; this page is the cross-route view that additionally covers
  * refusals, local answers, and parked requests.
  *
- * Data arrives over the plugin's same-origin `/lanagent/audit` route — the Host
- * half serves it from the same JSONL file the audit writer appends to — so this
- * module needs no typed Remote binding and no dependency beyond the `react` the
- * shell already provides. Colour comes only from theme variables, so the page
+ * Both halves arrive over the plugin's own same-origin routes, so this module
+ * needs no typed Remote binding and no dependency beyond the `react` the shell
+ * already provides. Colour comes only from theme variables, so the page
  * survives a scheme switch.
  */
 window.__ModuleLoader__.load({
@@ -23,12 +24,41 @@ window.__ModuleLoader__.load({
     const inject = ['slots', 'locale']
     const ENDPOINT = '/lanagent/audit'
     const ENDPOINT_CLI = '/lanagent/cli'
+    const AUTH_ENDPOINT = '/lanagent/auth'
+    const AUTH_LOGIN_ENDPOINT = '/lanagent/auth/login'
+    const AUTH_LOGOUT_ENDPOINT = '/lanagent/auth/logout'
     const REFRESH_MS = 10_000
     const CLI_REFRESH_MS = 30_000
+    const AUTH_REFRESH_MS = 30_000
 
     const DICT = {
       zh: {
         nav: 'LAN Agent',
+        accountTitle: '账号登录',
+        accountMissing: '未配置登录凭据',
+        accountConfigured: '凭据已配置',
+        accountLoggedIn: '已登录',
+        accountNotLoggedIn: '未登录',
+        accountUser: '账号',
+        accountPassword: '密码',
+        accountSubmit: '保存并登录',
+        accountLogin: '登录',
+        accountChange: '更换账号密码',
+        accountCancel: '取消',
+        accountLogout: '退出登录',
+        accountChecking: '检查中…',
+        accountTokenMode: '使用已有 JWT，不需要账号密码。',
+        accountTokenBadge: 'Token 模式',
+        accountServiceDown: '凭据服务不可用，无法保存。',
+        accountReadOnly: '凭据存储只读，无法保存。',
+        accountWorking: '正在登录…',
+        accountSaved: '已保存并登录。',
+        accountSavedPartial: '已登录，但凭据未保存。',
+        accountLoginOk: '已登录。',
+        accountLoggedOut: '已退出。',
+        accountFailed: '操作失败：',
+        accountRequired: '请填写账号和密码。',
+        accountBackoff: '登录冷却还剩 ',
         title: 'LAN Agent 工具调用诊断',
         description: '厂商 agent 在服务端决定调用；这里按请求 id 展示翻译、路由与结果，包括被拒绝和本地应答的请求。loop 调用同时也会出现在会话里。',
         refresh: '刷新',
@@ -53,6 +83,31 @@ window.__ModuleLoader__.load({
       },
       en: {
         nav: 'LAN Agent',
+        accountTitle: 'Account login',
+        accountMissing: 'No login credentials',
+        accountConfigured: 'Credentials configured',
+        accountLoggedIn: 'Signed in',
+        accountNotLoggedIn: 'Not signed in',
+        accountUser: 'Account',
+        accountPassword: 'Password',
+        accountSubmit: 'Save and sign in',
+        accountLogin: 'Sign in',
+        accountChange: 'Change account',
+        accountCancel: 'Cancel',
+        accountLogout: 'Sign out',
+        accountChecking: 'Checking…',
+        accountTokenMode: 'Uses an existing JWT; no account/password needed.',
+        accountTokenBadge: 'Token mode',
+        accountServiceDown: 'Credentials service unavailable; cannot save.',
+        accountReadOnly: 'Credential store is read-only; cannot save.',
+        accountWorking: 'Signing in…',
+        accountSaved: 'Saved and signed in.',
+        accountSavedPartial: 'Signed in, but the credentials were not saved.',
+        accountLoginOk: 'Signed in.',
+        accountLoggedOut: 'Signed out.',
+        accountFailed: 'Request failed: ',
+        accountRequired: 'Enter both the account and the password.',
+        accountBackoff: 'Login cooldown: ',
         title: 'LAN Agent tool diagnostics',
         description: 'The agent decides server-side; this view lists translation, route, and result per request id — including refusals and local answers. Loop calls also appear in the conversation.',
         refresh: 'Refresh',
@@ -101,6 +156,22 @@ window.__ModuleLoader__.load({
 .apl_audit .apl_wait { color: var(--dsw-alias-state-idle-primary); }
 .apl_audit .apl_body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
   color: var(--dsw-alias-label-secondary); white-space: pre-wrap; word-break: break-all; max-height: 6.5em; overflow: hidden; }
+.apl_auth { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px; background: var(--dsw-alias-bg-layer-1); padding: 12px; }
+.apl_auth .apl_badges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.apl_auth .apl_oktag { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-primary); }
+.apl_auth .apl_warn { color: var(--dsw-alias-state-error-primary); word-break: break-word; }
+.apl_auth .apl_okmsg { font-size: 12px; color: var(--dsw-alias-state-success-primary); }
+.apl_auth .apl_authform { display: flex; flex-direction: column; gap: 10px; max-width: 440px; }
+.apl_auth .apl_authform label { display: flex; flex-direction: column; gap: 5px; font-size: 12px;
+  color: var(--dsw-alias-label-secondary); }
+.apl_auth .apl_authform input { font: inherit; font-size: 13px; padding: 6px 9px; border-radius: 6px;
+  border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary); }
+.apl_auth .apl_authform input:hover { border-color: var(--dsw-alias-border-l2); }
+.apl_auth .apl_authform input:focus { border-color: var(--dsw-alias-border-l2); outline: 1px solid var(--dsw-alias-border-l2); outline-offset: 1px; }
+.apl_auth .apl_authform input:disabled { opacity: 0.6; }
+.apl_auth .apl_note { opacity: 0.85; }
 .apl_banner { display: flex; align-items: flex-start; gap: 8px; box-sizing: border-box; width: 100%;
   padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5;
   color: var(--dsw-alias-state-warn-primary, #6b5200);
@@ -178,6 +249,9 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { className: 'apl_audit' }, [
+        // Account state comes first: a deployment with no credentials must land
+        // on the inputs, not on a diagnostics page that cannot run a turn.
+        h(AccountCard, { key: 'account', t }),
         // The CLI banner belongs to THIS plugin's page: it is about this
         // plugin's optional capability, not about the harness in general.
         h(CliBanner, { key: 'cli', t }),
@@ -225,6 +299,222 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'apl_banner' }, [
         h('span', { key: 'label' }, t('cliMissing')),
         h('code', { key: 'path' }, String(status.path ?? '')),
+      ])
+    }
+
+    /**
+     * The account card at the top of this plugin's own settings page.
+     *
+     * The form is forced open whenever the credential store has no complete
+     * pair, which is the requested behaviour: a deployment that has never been
+     * configured sees the account/password inputs immediately. Once both
+     * credentials exist the card shrinks to status plus sign-in/change/sign-out
+     * controls, and the JWT stays in the Host's memory.
+     */
+    function AccountCard(props) {
+      const t = props.t
+      const [status, setStatus] = useState(null)
+      const [loadError, setLoadError] = useState('')
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [showForm, setShowForm] = useState(false)
+      const [user, setUser] = useState('')
+      const [password, setPassword] = useState('')
+      const alive = useRef(true)
+
+      const load = useCallback(async () => {
+        try {
+          const response = await fetch(AUTH_ENDPOINT, { headers: { accept: 'application/json' } })
+          const body = await response.json().catch(() => ({}))
+          if (!response.ok) throw new Error(body.error !== undefined ? String(body.error) : `HTTP ${response.status}`)
+          if (!alive.current) return
+          setStatus(body)
+          setLoadError('')
+        } catch (cause) {
+          if (alive.current) setLoadError(cause instanceof Error ? cause.message : String(cause))
+        }
+      }, [])
+
+      useEffect(() => {
+        alive.current = true
+        void load()
+        const timer = setInterval(() => { void load() }, AUTH_REFRESH_MS)
+        return () => { alive.current = false; clearInterval(timer) }
+      }, [load])
+
+      const call = async (path, payload) => {
+        const response = await fetch(path, {
+          method: 'POST',
+          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          body: JSON.stringify(payload ?? {}),
+        })
+        const body = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(body.error !== undefined ? String(body.error) : `HTTP ${response.status}`)
+        return body
+      }
+
+      const submit = async (event) => {
+        if (event !== undefined && typeof event.preventDefault === 'function') event.preventDefault()
+        setError('')
+        setNotice('')
+        if (user.trim().length === 0 || password.length === 0) {
+          setError(t('accountRequired'))
+          return
+        }
+        setBusy(true)
+        try {
+          const body = await call(AUTH_LOGIN_ENDPOINT, { user, password })
+          if (!alive.current) return
+          setStatus(body)
+          setPassword('')
+          setShowForm(false)
+          if (body.saved === false) {
+            setNotice(t('accountSavedPartial'))
+            if (typeof body.saveError === 'string' && body.saveError.length > 0) setError(body.saveError)
+          } else {
+            setNotice(t('accountSaved'))
+          }
+        } catch (cause) {
+          if (alive.current) setError(cause instanceof Error ? cause.message : String(cause))
+        } finally {
+          if (alive.current) setBusy(false)
+        }
+      }
+
+      const loginStored = async () => {
+        setError('')
+        setNotice('')
+        setBusy(true)
+        try {
+          const body = await call(AUTH_LOGIN_ENDPOINT, {})
+          if (!alive.current) return
+          setStatus(body)
+          setNotice(t('accountLoginOk'))
+        } catch (cause) {
+          if (alive.current) setError(cause instanceof Error ? cause.message : String(cause))
+        } finally {
+          if (alive.current) setBusy(false)
+        }
+      }
+
+      const logout = async () => {
+        setError('')
+        setNotice('')
+        setBusy(true)
+        try {
+          const body = await call(AUTH_LOGOUT_ENDPOINT, {})
+          if (!alive.current) return
+          setStatus(body)
+          setNotice(t('accountLoggedOut'))
+        } catch (cause) {
+          if (alive.current) setError(cause instanceof Error ? cause.message : String(cause))
+        } finally {
+          if (alive.current) setBusy(false)
+        }
+      }
+
+      if (status === null) {
+        return h('div', { className: 'apl_auth' }, [
+          h('h2', { key: 'title' }, t('accountTitle')),
+          loadError.length > 0
+            ? h('p', { className: 'apl_warn', key: 'loadError' }, `${t('accountFailed')}${loadError}`)
+            : h('p', { className: 'apl_meta', key: 'checking' }, t('accountChecking')),
+        ])
+      }
+
+      // The auth mode is a closed set: `token` or `login`. Treat anything else
+      // as login so an action label accidentally returned in `mode` (the bug
+      // that made “更换账号密码” inert after sign-out) can never hide the form.
+      const mode = status.mode === 'token' ? 'token' : 'login'
+      const isToken = mode === 'token'
+      const hasAccount = status.userConfigured === true
+      const hasPassword = status.passwordConfigured === true
+      const configured = hasAccount && hasPassword
+      const writable = status.serviceReachable === true && status.writable === true
+      // Missing credentials force the inputs open; a configured pair only opens
+      // them when the operator asks to change the account.
+      const formVisible = mode === 'login' && (configured ? showForm : true)
+
+      const form = formVisible ? h('form', { className: 'apl_authform', key: 'form', onSubmit: submit }, [
+        h('label', { key: 'user' }, [
+          h('span', { key: 'label' }, t('accountUser')),
+          h('input', {
+            key: 'input',
+            type: 'text',
+            autoComplete: 'username',
+            value: user,
+            disabled: busy || !writable,
+            onChange: (event) => setUser(event.target.value),
+          }),
+        ]),
+        h('label', { key: 'password' }, [
+          h('span', { key: 'label' }, t('accountPassword')),
+          h('input', {
+            key: 'input',
+            type: 'password',
+            autoComplete: 'current-password',
+            value: password,
+            disabled: busy || !writable,
+            onChange: (event) => setPassword(event.target.value),
+          }),
+        ]),
+        h('div', { className: 'apl_bar', key: 'actions' }, [
+          h('button', { key: 'submit', type: 'submit', disabled: busy || !writable }, busy ? t('accountWorking') : t('accountSubmit')),
+          configured
+            ? h('button', {
+              key: 'cancel',
+              type: 'button',
+              disabled: busy,
+              onClick: () => { setShowForm(false); setPassword(''); setError('') },
+            }, t('accountCancel'))
+            : null,
+        ]),
+      ]) : null
+
+      const controls = configured && !formVisible ? h('div', { className: 'apl_bar', key: 'controls' }, [
+        status.loggedIn
+          ? h('button', { key: 'logout', type: 'button', disabled: busy, onClick: () => { void logout() } }, t('accountLogout'))
+          : h('button', { key: 'login', type: 'button', disabled: busy, onClick: () => { void loginStored() } }, t('accountLogin')),
+        writable
+          ? h('button', {
+            key: 'change',
+            type: 'button',
+            disabled: busy,
+            onClick: () => { setShowForm(true); setError(''); setNotice('') },
+          }, t('accountChange'))
+          : null,
+      ]) : null
+
+      return h('div', { className: 'apl_auth' }, [
+        h('h2', { key: 'title' }, t('accountTitle')),
+        h('div', { className: 'apl_badges', key: 'badges' }, isToken
+          ? [h('span', { className: 'apl_tag', key: 'token' }, t('accountTokenBadge'))]
+          : [
+            h('span', { className: configured ? 'apl_tag apl_oktag' : 'apl_tag apl_fail', key: 'configured' },
+              configured ? t('accountConfigured') : t('accountMissing')),
+            configured
+              ? h('span', { className: status.loggedIn === true ? 'apl_tag apl_oktag' : 'apl_tag', key: 'login' },
+                status.loggedIn === true ? t('accountLoggedIn') : t('accountNotLoggedIn'))
+              : null,
+          ]),
+        mode === 'token' ? h('p', { className: 'apl_meta', key: 'token' }, t('accountTokenMode')) : null,
+        mode === 'login' && !writable
+          ? h('p', { className: 'apl_warn', key: 'nowrite' },
+            status.serviceReachable === true ? t('accountReadOnly') : t('accountServiceDown'))
+          : null,
+        status.backoffMs > 0 && status.loggedIn !== true
+          ? h('p', { className: 'apl_warn', key: 'backoff' }, `${t('accountBackoff')}${Math.ceil(status.backoffMs / 1000)}s`)
+          : null,
+        error.length > 0
+          ? h('p', { className: 'apl_warn', key: 'error' }, `${t('accountFailed')}${error}`)
+          : (status.loggedIn !== true && typeof status.lastError === 'string' && status.lastError.length > 0
+            ? h('p', { className: 'apl_warn', key: 'lastError' }, status.lastError)
+            : null),
+        notice.length > 0 ? h('p', { className: 'apl_okmsg', key: 'notice' }, notice) : null,
+        loadError.length > 0 ? h('p', { className: 'apl_warn', key: 'loadError' }, `${t('accountFailed')}${loadError}`) : null,
+        form,
+        controls,
       ])
     }
 

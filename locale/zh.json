@@ -1,4 +1,4 @@
 {
   "title": "LAN Agent",
-  "description": "局域网 agent 服务作为 DSH 原生 LLM 路由（lanagent），并可选地把厂商 CLI 作为一次性子代理能力接入。"
+  "description": "局域网 agent 服务作为 DSH 原生 LLM 路由（lanagent）；设置页可填写账号密码登录，并可选择把厂商 CLI 作为一次性子代理能力接入。"
 }

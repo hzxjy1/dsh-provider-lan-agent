@@ -8,11 +8,10 @@
  *
  * Three properties matter more than the code:
  *
- *   1. **The password never leaves this module.** It is resolved from the DSH
- *      credential seam on each attempt (the seam requires per-operation
- *      resolution, which is also what makes a changed password take effect
- *      without a restart) and is never logged, never stored, and never sent
- *      anywhere but the login endpoint.
+ *   1. **The password never leaves the login path.** The settings page may hand
+ *      it over once, this module sends it only to the login endpoint, and the
+ *      durable copy lives in the DSH credential store — never in a plugin
+ *      config file, a log, or this module's memory.
  *
  *   2. **The JWT stays in memory.** Nothing is written back to disk, so this
  *      plugin leaves no credential file behind (unlike the CLI-wrapping
@@ -102,6 +101,12 @@ export class LanAgentAuth {
     this.notBefore = 0
     /** @type {number[]} timestamps of recent failed attempts, for the hourly cap */
     this.failures = []
+    /**
+     * The last failed attempt's user-facing message, kept only for the settings
+     * page. It never contains the account name or the password.
+     * @type {string}
+     */
+    this.lastError = ''
   }
 
   /** Drop the cached JWT so the next call re-authenticates. */
@@ -124,6 +129,28 @@ export class LanAgentAuth {
   }
 
   /**
+   * Resolve one credential reference and report which layer supplied it.
+   *
+   * The value is a secret; callers that serialize a status must keep only the
+   * source label and drop the value.
+   *
+   * @param {string} ref
+   * @returns {Promise<{value: string, source: string}|undefined>}
+   */
+  async #resolve(ref) {
+    const service = this.#credentialsService()
+    if (service !== undefined) {
+      const hit = await service.resolve(ref)
+      if (hit !== undefined && typeof hit.value === 'string' && hit.value.length > 0) {
+        const source = typeof hit.source === 'string' && hit.source.length > 0 ? hit.source : 'store'
+        return { value: hit.value, source }
+      }
+    }
+    const ambient = this.env?.[ref]
+    return typeof ambient === 'string' && ambient.length > 0 ? { value: ambient, source: 'environment' } : undefined
+  }
+
+  /**
    * Resolve one credential reference: the DSH credential seam first (provider
    * store first since dsh 0.2.1-rc.2, then the environment and `.env` files),
    * then the raw environment as a fallback for compositions without a
@@ -133,13 +160,75 @@ export class LanAgentAuth {
    * @returns {Promise<string|undefined>}
    */
   async resolveRef(ref) {
+    const hit = await this.#resolve(ref)
+    return hit?.value
+  }
+
+  /**
+   * Presence facts for the settings page — never a value.
+   *
+   * A configured credential is not a live JWT: the JWT is memory-only and a
+   * restart drops it, while the stored account/password survive. The page uses
+   * that difference to offer "log in" instead of asking for the credentials
+   * again.
+   *
+   * @returns {Promise<{
+   *   mode: string,
+   *   userRef: string,
+   *   passwordRef: string,
+   *   tokenRef: string,
+   *   userConfigured: boolean,
+   *   passwordConfigured: boolean,
+   *   userSource: string,
+   *   passwordSource: string,
+   *   loggedIn: boolean,
+   *   serviceReachable: boolean,
+   *   writable: boolean,
+   *   backoffMs: number,
+   *   lastError: string,
+   * }>}
+   */
+  async status() {
+    const account = await this.#accountStatus()
+    const password = await this.#resolve(this.passwordRef)
+    // A note about a missing half is stale as soon as that half appears (the
+    // store can be edited from the Models page or the file while this page is
+    // open). A rejected login is a different failure and stays visible.
+    if (account !== undefined && /no account name behind/.test(this.lastError)) this.lastError = ''
+    if (password !== undefined && /no password behind/.test(this.lastError)) this.lastError = ''
     const service = this.#credentialsService()
-    if (service !== undefined) {
-      const hit = await service.resolve(ref)
-      if (hit !== undefined && typeof hit.value === 'string' && hit.value.length > 0) return hit.value
+    let writable = false
+    if (service !== undefined && typeof service.describe === 'function') {
+      try {
+        const [accountInfo, passwordInfo] = await Promise.all([
+          service.describe(this.userRef),
+          service.describe(this.passwordRef),
+        ])
+        writable = accountInfo?.writable !== false && passwordInfo?.writable !== false
+      } catch (error) {
+        this.logger?.warn?.(`lanagent: cannot describe credential refs: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
-    const ambient = this.env?.[ref]
-    return typeof ambient === 'string' && ambient.length > 0 ? ambient : undefined
+    return {
+      mode: this.mode,
+      userRef: this.userRef,
+      passwordRef: this.passwordRef,
+      tokenRef: this.tokenRef,
+      userConfigured: account !== undefined,
+      passwordConfigured: password !== undefined,
+      userSource: account?.source ?? '',
+      passwordSource: password?.source ?? '',
+      loggedIn: this.cached !== undefined,
+      serviceReachable: service !== undefined,
+      writable,
+      backoffMs: Math.max(0, this.notBefore - Date.now()),
+      // "No account/password" is already visible as the two presence flags;
+      // repeating the long internal hint here only clutters the form. A login
+      // rejection is different and stays visible.
+      lastError: this.cached === undefined && !/no account name behind|no password behind/.test(this.lastError)
+        ? this.lastError
+        : '',
+    }
   }
 
   /**
@@ -180,14 +269,66 @@ export class LanAgentAuth {
   }
 
   /**
+   * Log in with credentials supplied by the settings page, without reading the
+   * store first.
+   *
+   * The caller persists them only after this resolves, so a typo never replaces
+   * a working credential. A manual attempt is allowed during the automatic
+   * backoff — a human correcting a password is not a retry storm — while the
+   * per-hour cap still applies.
+   *
+   * @param {string} account
+   * @param {string} password
+   * @param {AbortSignal} [signal]
+   * @returns {Promise<string>}
+   */
+  async login(account, password, signal) {
+    if (this.mode !== 'login') {
+      throw new LanAgentError('lanagent: auth.mode is "token"; no account login is performed', {
+        code: FailureCode.badRequest,
+      })
+    }
+    const user = typeof account === 'string' ? account.trim() : ''
+    if (user.length === 0) {
+      throw new LanAgentError('lanagent: the account name is empty', { code: FailureCode.missingCredential })
+    }
+    if (typeof password !== 'string' || password.length === 0) {
+      throw new LanAgentError('lanagent: the password is empty', { code: FailureCode.missingCredential })
+    }
+    this.#guardLogin({ manual: true })
+    return await this.#attempt(user, password, signal)
+  }
+
+  /**
    * Perform exactly one login attempt, honoring the backoff window.
    *
    * @param {AbortSignal} [signal]
    * @returns {Promise<string>}
    */
   async #login(signal) {
+    this.#guardLogin()
+    const account = await this.#resolveAccount()
+    const password = await this.resolveRef(this.passwordRef)
+    if (password === undefined) {
+      const message = `lanagent: no password behind credential ref "${this.passwordRef}"; open the LAN Agent settings page to enter the account and password, or export it in the launching environment${this.#reachabilityHint()}`
+      this.lastError = message
+      throw new LanAgentError(message, { code: FailureCode.missingCredential })
+    }
+    return await this.#attempt(account, password, signal)
+  }
+
+  /**
+   * Enforce the attempt budget.
+   *
+   * The time-based backoff protects the automatic path; a manual attempt skips
+   * only that window. The hourly cap is never skipped, because it is what keeps
+   * an unknown password-error code from locking the SSO account.
+   *
+   * @param {{manual?: boolean}} [options]
+   */
+  #guardLogin({ manual = false } = {}) {
     const now = Date.now()
-    if (now < this.notBefore) {
+    if (!manual && now < this.notBefore) {
       const waitMs = this.notBefore - now
       throw new LanAgentError(
         `lanagent: login is backing off for another ${Math.ceil(waitMs / 1000)}s after repeated failures`,
@@ -202,16 +343,17 @@ export class LanAgentAuth {
         { code: FailureCode.unauthorized },
       )
     }
+  }
 
-    const account = await this.#resolveAccount()
-    const password = await this.resolveRef(this.passwordRef)
-    if (password === undefined) {
-      throw new LanAgentError(
-        `lanagent: no password behind credential ref "${this.passwordRef}"; store it through the credentials service (the web Models page writes it) or export it in the launching environment${this.#reachabilityHint()}`,
-        { code: FailureCode.missingCredential },
-      )
-    }
-
+  /**
+   * Send one login request and adopt its token.
+   *
+   * @param {string} account
+   * @param {string} password
+   * @param {AbortSignal} [signal]
+   * @returns {Promise<string>}
+   */
+  async #attempt(account, password, signal) {
     let response
     let body
     try {
@@ -224,30 +366,28 @@ export class LanAgentAuth {
       body = await response.json()
     } catch (error) {
       if (error?.name === 'AbortError') throw error
-      this.#recordFailure()
-      throw new LanAgentError(`lanagent: login request failed: ${error instanceof Error ? error.message : String(error)}`, {
-        code: FailureCode.network,
-        cause: error,
-      })
+      const message = `lanagent: login request failed: ${error instanceof Error ? error.message : String(error)}`
+      this.#recordFailure(message)
+      throw new LanAgentError(message, { code: FailureCode.network, cause: error })
     }
 
     const code = String(body?.code ?? '')
     const token = body?.data?.token
     if (code !== '0' && code !== '200') {
-      this.#recordFailure()
       // The response body may echo account state; the vendor code is enough to
       // act on, so only the code reaches the log.
-      throw new LanAgentError(`lanagent: login rejected (vendor code ${code || 'unknown'})`, {
-        code: FailureCode.unauthorized,
-        status: response.status,
-      })
+      const message = `lanagent: login rejected (vendor code ${code || 'unknown'})`
+      this.#recordFailure(message)
+      throw new LanAgentError(message, { code: FailureCode.unauthorized, status: response.status })
     }
     if (typeof token !== 'string' || token.length === 0) {
-      this.#recordFailure()
-      throw new LanAgentError('lanagent: login succeeded but returned no token', { code: FailureCode.protocol })
+      const message = 'lanagent: login succeeded but returned no token'
+      this.#recordFailure(message)
+      throw new LanAgentError(message, { code: FailureCode.protocol })
     }
     this.failureCount = 0
     this.notBefore = 0
+    this.lastError = ''
     this.cached = token
     // The account name is treated as hidden information now, so it is not
     // echoed back into logs.
@@ -266,18 +406,30 @@ export class LanAgentAuth {
    * @returns {Promise<string>}
    */
   async #resolveAccount() {
-    const fromRef = await this.resolveRef(this.userRef)
+    const fromRef = await this.#resolve(this.userRef)
     if (fromRef !== undefined) {
-      if (this.user.length > 0 && this.user !== fromRef) {
+      if (this.user.length > 0 && this.user !== fromRef.value) {
         this.logger?.warn?.(`lanagent: ${this.userRef} and the row's \`user\` disagree; using the credential reference`)
       }
-      return fromRef
+      return fromRef.value
     }
     if (this.user.length > 0) return this.user
-    throw new LanAgentError(
-      `lanagent: no account name behind ${this.userRef}, and the row sets no \`user\` fallback; store the account through the credentials service (the web Models page writes it) or export ${this.userRef}${this.#reachabilityHint()}`,
-      { code: FailureCode.missingCredential },
-    )
+    const message = `lanagent: no account name behind ${this.userRef}, and the row sets no \`user\` fallback; open the LAN Agent settings page to enter the account and password, or export ${this.userRef}${this.#reachabilityHint()}`
+    this.lastError = message
+    throw new LanAgentError(message, { code: FailureCode.missingCredential })
+  }
+
+  /**
+   * The account for status only: the plain-config fallback is a valid account,
+   * but status reports it without triggering the disagreement warning that a
+   * real login should emit.
+   *
+   * @returns {Promise<{value: string, source: string}|undefined>}
+   */
+  async #accountStatus() {
+    const fromRef = await this.#resolve(this.userRef)
+    if (fromRef !== undefined) return fromRef
+    return this.user.length > 0 ? { value: this.user, source: 'config' } : undefined
   }
 
   /**
@@ -294,8 +446,14 @@ export class LanAgentAuth {
       : ' (the credentials service is reachable, but that reference resolves to nothing)'
   }
 
-  /** Advance the backoff window after one failed attempt. */
-  #recordFailure() {
+  /**
+   * Advance the backoff window after one failed attempt.
+   *
+   * @param {string} [message] the user-facing failure, retained for the
+   *   settings page (never the account or password).
+   */
+  #recordFailure(message = '') {
+    this.lastError = typeof message === 'string' ? message : ''
     this.failures.push(Date.now())
     const delay = Math.min(this.initialMs * 2 ** this.failureCount, this.maxMs)
     this.failureCount += 1

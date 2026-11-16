@@ -145,6 +145,17 @@ route.
   plain HTTP: run it only on a trusted network.
 - Account and password are credential references (`LAN_AGENT_USER`,
   `LAN_AGENT_PASSWORD`), never plaintext in the patch.
+- The plugin's own settings section is the account surface. `GET
+  /lanagent/auth` reports presence, source, writability, and whether a JWT is
+  live (never the values); `POST /lanagent/auth/login` logs in FIRST and writes
+  the refs only after the vendor accepts them, so a typo cannot displace a
+  working pair; `POST /lanagent/auth/logout` drops the memory-only JWT. The
+  writes are same-origin only, and an empty login submission means "reuse the
+  stored pair" (the post-restart case). When either half is missing the settings
+  page forces the account/password inputs open.
+- The credential store can be edited while the page is open (the Models page
+  writes the same refs). A stale "missing account/password" note is therefore
+  cleared as soon as that half resolves; a rejected login stays visible.
 - `pathMappings` defaults to the agent CLI's home mapped to
   `.lan-agent-memory` under the session workspace. Override it only when the
   deployment's spelling differs.
