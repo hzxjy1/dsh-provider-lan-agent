@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-provider-lan-agent",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
   "description": "LAN agent service LLM provider route for DSH: a server-side agent driven through a client-side tool bridge.",
   "type": "module",
